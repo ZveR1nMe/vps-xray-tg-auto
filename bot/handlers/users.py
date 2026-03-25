@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid as uuid_mod
 
@@ -7,6 +8,15 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
+
+
+async def _sync_xray_clients() -> None:
+    """Синхронизирует клиентов из БД в xray config (workaround для x-ui v2.8.11)."""
+    proc = await asyncio.create_subprocess_exec(
+        "python3", "/opt/vps-setup/sync_clients.py",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    await proc.communicate()
 
 from bot.keyboards import back_button, confirm_delete, users_menu
 
@@ -115,6 +125,7 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
 
     inbound_id = inbounds[0]["id"]
     await xui.add_client(inbound_id=inbound_id, uuid=client_uuid, email=name)
+    await _sync_xray_clients()
 
     from bot.services.link_gen import generate_vless_link
 
@@ -178,6 +189,7 @@ async def cb_del_confirm(callback: CallbackQuery) -> None:
             break
 
     if deleted:
+        await _sync_xray_clients()
         await callback.answer(f"✅ {email} удалён")
         await cb_users_list(callback)
     elif error_msg:
