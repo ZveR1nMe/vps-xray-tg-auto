@@ -4,6 +4,7 @@ from bot.handlers.start import router as start_router
 from bot.handlers.status import router as status_router
 from bot.handlers.network import router as network_router
 from bot.handlers.users import router as users_router
+from bot.handlers.traffic import router as traffic_router
 
 
 def register_all_routers() -> Router:
@@ -13,4 +14,5 @@ def register_all_routers() -> Router:
     root.include_router(status_router)
     root.include_router(network_router)
     root.include_router(users_router)
+    root.include_router(traffic_router)
     return root
