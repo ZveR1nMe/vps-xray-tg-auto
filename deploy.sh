@@ -22,42 +22,80 @@ if [[ ! -d "$SCRIPT_DIR/bot" || ! -f "$SCRIPT_DIR/setup.sh" ]]; then
     exit 1
 fi
 
-# --- Ввод данных ---
+# --- Конфиг ---
 
-echo ""
-echo "======================================"
-echo "  VPS Setup — Деплой"
-echo "======================================"
-echo ""
+CONFIG_FILE="$SCRIPT_DIR/.deploy.env"
 
-read -rp "IP сервера: " SERVER_IP
-if [[ -z "$SERVER_IP" ]]; then
-    err "IP обязателен"
-    exit 1
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+    log "Загружен конфиг из .deploy.env"
+    echo ""
+    echo "======================================"
+    echo "  Сервер:    ${SSH_USER:-root}@${SERVER_IP}:${CURRENT_SSH_PORT:-22}"
+    echo "  SSH-порт:  ${NEW_SSH_PORT:-${CURRENT_SSH_PORT:-22}}"
+    echo "  Бот:       ${BOT_TOKEN:0:10}..."
+    echo "  Chat ID:   ${CHAT_ID}"
+    echo "======================================"
+    echo ""
+    read -rp "Использовать эти данные? [Y/n] " use_saved
+    if [[ ! "$use_saved" =~ ^[Nn]$ ]]; then
+        SSH_USER="${SSH_USER:-root}"
+        CURRENT_SSH_PORT="${CURRENT_SSH_PORT:-22}"
+        NEW_SSH_PORT="${NEW_SSH_PORT:-$CURRENT_SSH_PORT}"
+    else
+        rm -f "$CONFIG_FILE"
+        log "Вводим заново..."
+    fi
 fi
 
-read -rp "SSH-порт сервера (22): " CURRENT_SSH_PORT
-CURRENT_SSH_PORT="${CURRENT_SSH_PORT:-22}"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo ""
+    echo "======================================"
+    echo "  VPS Setup — Деплой"
+    echo "======================================"
+    echo ""
 
-read -rp "SSH-пользователь (root): " SSH_USER
-SSH_USER="${SSH_USER:-root}"
+    read -rp "IP сервера: " SERVER_IP
+    if [[ -z "$SERVER_IP" ]]; then
+        err "IP обязателен"
+        exit 1
+    fi
 
-echo ""
-log "Настройка Telegram-бота"
-echo "  1. Создайте бота: @BotFather → /newbot → скопируйте токен"
-echo "  2. Узнайте Chat ID: напишите @userinfobot"
-echo ""
+    read -rp "SSH-порт сервера (22): " CURRENT_SSH_PORT
+    CURRENT_SSH_PORT="${CURRENT_SSH_PORT:-22}"
 
-read -rp "Bot Token: " BOT_TOKEN
-read -rp "Chat ID: " CHAT_ID
+    read -rp "SSH-пользователь (root): " SSH_USER
+    SSH_USER="${SSH_USER:-root}"
 
-if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
-    err "Bot Token и Chat ID обязательны"
-    exit 1
+    echo ""
+    log "Настройка Telegram-бота"
+    echo "  1. Создайте бота: @BotFather → /newbot → скопируйте токен"
+    echo "  2. Узнайте Chat ID: напишите @userinfobot"
+    echo ""
+
+    read -rp "Bot Token: " BOT_TOKEN
+    read -rp "Chat ID: " CHAT_ID
+
+    if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+        err "Bot Token и Chat ID обязательны"
+        exit 1
+    fi
+
+    read -rp "Новый SSH-порт на сервере (Enter = оставить $CURRENT_SSH_PORT): " NEW_SSH_PORT
+    NEW_SSH_PORT="${NEW_SSH_PORT:-$CURRENT_SSH_PORT}"
+
+    # Сохраняем конфиг
+    cat > "$CONFIG_FILE" << CONF
+SERVER_IP="$SERVER_IP"
+CURRENT_SSH_PORT="$CURRENT_SSH_PORT"
+SSH_USER="$SSH_USER"
+BOT_TOKEN="$BOT_TOKEN"
+CHAT_ID="$CHAT_ID"
+NEW_SSH_PORT="$NEW_SSH_PORT"
+CONF
+    chmod 600 "$CONFIG_FILE"
+    log "Конфиг сохранён в .deploy.env"
 fi
-
-read -rp "Новый SSH-порт на сервере (Enter = оставить $CURRENT_SSH_PORT): " NEW_SSH_PORT
-NEW_SSH_PORT="${NEW_SSH_PORT:-$CURRENT_SSH_PORT}"
 
 # --- Подтверждение ---
 
