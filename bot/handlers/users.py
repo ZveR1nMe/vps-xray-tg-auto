@@ -44,14 +44,46 @@ async def cb_users(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "users_list")
 async def cb_users_list(callback: CallbackQuery) -> None:
     from bot import deps
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
     xui = deps.xui_client
     inbounds = await xui.list_inbounds()
     clients = []
     for ib in inbounds:
         clients.extend(parse_clients(ib))
 
+    # Кнопка удаления напротив каждого пользователя
+    rows = []
+    for c in clients:
+        email = c["email"]
+        rows.append([
+            InlineKeyboardButton(text=f"👤 {email}", callback_data=f"noop:{email}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"del_ask:{email}"),
+        ])
+    rows.append([
+        InlineKeyboardButton(text="➕ Добавить", callback_data="users_add"),
+        InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu"),
+    ])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    text = "👥 <b>Пользователи</b>\n" if clients else "👥 Нет пользователей"
+
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("noop:"))
+async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("del_ask:"))
+async def cb_del_ask(callback: CallbackQuery) -> None:
+    email = callback.data.split(":", 1)[1]
     await callback.message.edit_text(
-        format_users_list(clients), reply_markup=users_menu(), parse_mode="HTML"
+        f"Удалить пользователя <b>{email}</b>?",
+        parse_mode="HTML",
+        reply_markup=confirm_delete(email),
     )
     await callback.answer()
 
@@ -123,23 +155,6 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
     await state.clear()
 
 
-@router.callback_query(F.data == "users_del")
-async def cb_users_del(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.message.edit_text("Введите имя пользователя для удаления:")
-    await state.set_state(DeleteUser.waiting_name)
-    await callback.answer()
-
-
-@router.message(DeleteUser.waiting_name)
-async def on_delete_name(message: Message, state: FSMContext) -> None:
-    name = message.text.strip()
-    await message.answer(
-        f"Удалить пользователя <b>{name}</b>?",
-        parse_mode="HTML",
-        reply_markup=confirm_delete(name),
-    )
-    await state.clear()
-
 
 @router.callback_query(F.data.startswith("del_confirm:"))
 async def cb_del_confirm(callback: CallbackQuery) -> None:
@@ -158,6 +173,10 @@ async def cb_del_confirm(callback: CallbackQuery) -> None:
         if deleted:
             break
 
-    msg = f"✅ Пользователь {email} удалён" if deleted else f"❌ Пользователь {email} не найден"
-    await callback.message.edit_text(msg, reply_markup=users_menu())
-    await callback.answer()
+    if deleted:
+        await callback.answer(f"✅ {email} удалён")
+        # Возвращаемся в список
+        await cb_users_list(callback)
+    else:
+        await callback.message.edit_text(f"❌ Пользователь {email} не найден", reply_markup=users_menu())
+        await callback.answer()
