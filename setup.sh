@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ===== НАСТРОЙКИ — заполнить перед первым запуском =====
-BOT_TOKEN="ВСТАВЬ_ТОКЕН_СЮДА"
-CHAT_ID="ВСТАВЬ_CHAT_ID_СЮДА"
-# ========================================================
-
 INSTALL_DIR="/opt/vps-setup"
 LOG_DIR="/var/log/vps-setup"
 
@@ -26,8 +21,19 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if [[ "$BOT_TOKEN" == "ВСТАВЬ_ТОКЕН_СЮДА" || "$CHAT_ID" == "ВСТАВЬ_CHAT_ID_СЮДА" ]]; then
-    err "Заполните BOT_TOKEN и CHAT_ID в начале скрипта"
+# --- Telegram credentials ---
+
+echo ""
+log "Настройка Telegram-бота"
+echo "  1. Создайте бота: напишите @BotFather в Telegram → /newbot"
+echo "  2. Узнайте свой Chat ID: напишите @userinfobot или @getmyid_bot"
+echo ""
+
+read -rp "Bot Token: " BOT_TOKEN
+read -rp "Chat ID: " CHAT_ID
+
+if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+    err "Bot Token и Chat ID обязательны"
     exit 1
 fi
 
