@@ -1,7 +1,7 @@
-import json
 from aiogram import Router
 from aiogram.types import CallbackQuery
 
+from bot.handlers.users import parse_clients
 from bot.keyboards import back_button
 
 router = Router()
@@ -24,8 +24,7 @@ async def cb_traffic(callback: CallbackQuery) -> None:
 
     lines = ["📈 <b>Трафик по пользователям</b>\n"]
     for ib in inbounds:
-        settings = json.loads(ib.get("settings", "{}"))
-        clients = settings.get("clients", [])
+        clients = parse_clients(ib)
         client_stats = ib.get("clientStats", [])
 
         stat_map = {s["email"]: s for s in client_stats} if client_stats else {}

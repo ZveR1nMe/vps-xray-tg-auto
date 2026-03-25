@@ -74,8 +74,9 @@ async def _daily_update_check(bot: Bot, chat_id: int) -> None:
     while True:
         await asyncio.sleep(86400)
         try:
-            current = await get_current_version()
-            latest = await get_latest_version()
+            current, latest = await asyncio.gather(
+                get_current_version(), get_latest_version()
+            )
             if latest and current and latest != current:
                 await bot.send_message(
                     chat_id,

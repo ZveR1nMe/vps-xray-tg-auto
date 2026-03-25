@@ -31,7 +31,7 @@ def _get_system_status() -> dict:
     load = psutil.getloadavg()
 
     return {
-        "cpu_percent": psutil.cpu_percent(interval=1),
+        "cpu_percent": psutil.cpu_percent(interval=0),
         "mem_used_gb": round(mem.used / (1024 ** 3), 1),
         "mem_total_gb": round(mem.total / (1024 ** 3), 1),
         "disk_used_gb": round(disk.used / (1024 ** 3), 1),

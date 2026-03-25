@@ -52,7 +52,12 @@ async def _get_bandwidth() -> tuple[float, float]:
 async def cb_network(callback: CallbackQuery) -> None:
     await callback.answer("⏳ Проверяю сеть...")
 
-    results = await asyncio.gather(*[_ping(host) for _, host in PING_TARGETS])
+    ping_tasks = [_ping(host) for _, host in PING_TARGETS]
+    ping_tasks.append(_ping("8.8.8.8", count=20))
+    all_pings = await asyncio.gather(*ping_tasks)
+    results = all_pings[:-1]
+    big_ping = all_pings[-1]
+
     rx, tx = await _get_bandwidth()
 
     lines = ["🌐 <b>Сеть</b>\n"]
@@ -61,8 +66,6 @@ async def cb_network(callback: CallbackQuery) -> None:
         lines.append(f"{name}: {ms} (loss: {res['loss']})")
 
     lines.append(f"\n📥 In: {rx} KB/s | 📤 Out: {tx} KB/s")
-
-    big_ping = await _ping("8.8.8.8", count=20)
     lines.append(f"\nПотеря пакетов (20 пакетов → Google): {big_ping['loss']}")
 
     await callback.message.edit_text(

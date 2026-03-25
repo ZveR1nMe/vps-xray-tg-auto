@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 
 import psutil
 
@@ -62,7 +63,7 @@ class Monitor:
         self._cpu_high_since: float = 0
         self._last_net_bytes: int = 0
         self._last_net_time: float = 0
-        self._traffic_history: list[float] = []
+        self._traffic_history: deque[float] = deque(maxlen=288)
 
     async def run(self) -> None:
         while True:
@@ -90,8 +91,9 @@ class Monitor:
 
         disk = psutil.disk_usage("/").percent
 
-        xui_active = await _is_service_active("x-ui")
-        xray_active = await _is_service_active("xray")
+        xui_active, xray_active = await asyncio.gather(
+            _is_service_active("x-ui"), _is_service_active("xray")
+        )
 
         net = psutil.net_io_counters()
         current_bytes = net.bytes_recv + net.bytes_sent
@@ -101,8 +103,6 @@ class Monitor:
             if elapsed > 0:
                 rate = (current_bytes - self._last_net_bytes) / elapsed
                 self._traffic_history.append(rate)
-                if len(self._traffic_history) > 288:
-                    self._traffic_history = self._traffic_history[-288:]
                 if len(self._traffic_history) > 1:
                     avg = sum(self._traffic_history[:-1]) / len(self._traffic_history[:-1])
                     if avg > 0:
