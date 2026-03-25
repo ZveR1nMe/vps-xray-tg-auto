@@ -22,19 +22,22 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- Telegram credentials ---
+# Принимаем через env (от deploy.sh) или спрашиваем интерактивно
 
-echo ""
-log "Настройка Telegram-бота"
-echo "  1. Создайте бота: напишите @BotFather в Telegram → /newbot"
-echo "  2. Узнайте свой Chat ID: напишите @userinfobot или @getmyid_bot"
-echo ""
+if [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]]; then
+    echo ""
+    log "Настройка Telegram-бота"
+    echo "  1. Создайте бота: напишите @BotFather в Telegram → /newbot"
+    echo "  2. Узнайте свой Chat ID: напишите @userinfobot или @getmyid_bot"
+    echo ""
 
-read -rp "Bot Token: " BOT_TOKEN
-read -rp "Chat ID: " CHAT_ID
+    read -rp "Bot Token: " BOT_TOKEN
+    read -rp "Chat ID: " CHAT_ID
 
-if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
-    err "Bot Token и Chat ID обязательны"
-    exit 1
+    if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+        err "Bot Token и Chat ID обязательны"
+        exit 1
+    fi
 fi
 
 if ! grep -qi ubuntu /etc/os-release 2>/dev/null; then
@@ -91,8 +94,10 @@ dpkg-reconfigure -plow unattended-upgrades
 
 # --- SSH-порт ---
 
-read -rp "SSH-порт (текущий: 22, Enter для 22): " SSH_PORT
-SSH_PORT="${SSH_PORT:-22}"
+if [[ -z "${SSH_PORT:-}" ]]; then
+    read -rp "SSH-порт (текущий: 22, Enter для 22): " SSH_PORT
+    SSH_PORT="${SSH_PORT:-22}"
+fi
 
 if [[ "$SSH_PORT" != "22" ]]; then
     log "Смена SSH-порта на $SSH_PORT..."
