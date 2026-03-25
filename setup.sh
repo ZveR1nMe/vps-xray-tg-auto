@@ -172,38 +172,49 @@ log "Telegram OK"
 # --- 3X-UI ---
 
 log "Установка 3X-UI..."
-# v2.8.11+ интерактивный: y → 3 (custom SSL, без сертификатов — панель через SSH-туннель)
-printf 'y\n3\n\n\n' | bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+# v2.8.11+ интерактивный. Ответы: y (установка), затем SSL-промпты.
+# Отправляем избыток ответов чтобы покрыть любые промпты — лишние игнорируются.
+yes | bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) || true
+
+# Ждём пока x-ui запустится
+sleep 5
 
 # --- Настройка credentials через SQLite (x-ui setting ненадёжен в v2.8.11) ---
 
 XUI_USER="admin_$(openssl rand -hex 4)"
-XUI_PASS="$(openssl rand -base64 12 | tr -d '/+=')"
+XUI_PASS="$(openssl rand -hex 12)"
 XUI_PATH="/panel-$(openssl rand -hex 8)/"
 
-# Устанавливаем bcrypt в venv бота (создаём заранее)
+# Создаём venv и ставим bcrypt для хеширования пароля
+mkdir -p "$INSTALL_DIR"
 python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
 "$INSTALL_DIR/venv/bin/pip" install bcrypt -q
 
-# Генерируем bcrypt-хеш пароля
 BCRYPT_HASH=$("$INSTALL_DIR/venv/bin/python3" -c "
 import bcrypt
-print(bcrypt.hashpw(b'''${XUI_PASS}''', bcrypt.gensalt()).decode())
+print(bcrypt.hashpw(b'${XUI_PASS}', bcrypt.gensalt()).decode())
 ")
 
-# Обновляем credentials, порт, base path напрямую в БД
+# Обновляем credentials напрямую в БД
 sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username='${XUI_USER}', password='${BCRYPT_HASH}' WHERE id=1;"
-sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webPort', '2053');"
-sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '${XUI_PATH}');"
+
+# Обновляем порт и path — UPDATE существующих + INSERT если нет
+sqlite3 /etc/x-ui/x-ui.db "
+DELETE FROM settings WHERE key IN ('webPort', 'webBasePath');
+INSERT INTO settings (key, value) VALUES ('webPort', '2053');
+INSERT INTO settings (key, value) VALUES ('webBasePath', '${XUI_PATH}');
+"
 
 systemctl restart x-ui
-sleep 3
+sleep 5
 
-# Проверяем что панель слушает
+# Проверяем порт
 XUI_PORT=$(ss -tlnp | grep x-ui | grep -oP ':\K\d+' | head -1)
-if [[ "$XUI_PORT" != "2053" ]]; then
-    warn "Панель на порту $XUI_PORT вместо 2053"
+if [[ -z "$XUI_PORT" ]]; then
+    err "3X-UI не запустился"
+    journalctl -u x-ui --no-pager -n 10
+    exit 1
 fi
 
 log "3X-UI установлен: user=$XUI_USER path=$XUI_PATH port=$XUI_PORT"
