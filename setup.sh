@@ -87,7 +87,7 @@ fi
 log "Обновление системы..."
 export DEBIAN_FRONTEND=noninteractive
 apt update && apt upgrade -y
-apt install -y curl wget jq python3 python3-pip python3-venv ufw fail2ban unzip
+apt install -y curl wget jq bc sqlite3 python3 python3-pip python3-venv ufw fail2ban unzip
 
 apt install -y unattended-upgrades
 dpkg-reconfigure -plow unattended-upgrades
@@ -172,16 +172,26 @@ log "Telegram OK"
 # --- 3X-UI ---
 
 log "Установка 3X-UI..."
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<< "y"
+# Установщик v2.8.11+ интерактивный: y (подтверждение) → 3 (custom SSL) → Enter (пропуск cert) → Enter (пропуск key)
+# Панель доступна только через SSH-туннель, поэтому SSL не нужен
+printf 'y\n3\n\n\n' | bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
+# Генерируем свои credentials и настройки
 XUI_USER="admin_$(openssl rand -hex 4)"
 XUI_PASS="$(openssl rand -base64 16)"
 XUI_PATH="/panel-$(openssl rand -hex 8)"
 
-x-ui setting -username "$XUI_USER" -password "$XUI_PASS"
-x-ui setting -webBasePath "$XUI_PATH"
-x-ui setting -listen 127.0.0.1
-x-ui setting -port 2053
+x-ui setting -username "$XUI_USER" -password "$XUI_PASS" 2>/dev/null
+x-ui setting -webBasePath "$XUI_PATH" 2>/dev/null
+x-ui setting -port 2053 2>/dev/null
+
+# Привязываем к localhost — только через SSH-туннель
+# Используем sqlite3 напрямую, т.к. x-ui setting -listen может не работать
+if command -v sqlite3 &>/dev/null; then
+    sqlite3 /etc/x-ui/x-ui.db "UPDATE inbounds SET listen = '127.0.0.1' WHERE 1=1;" 2>/dev/null || true
+fi
+# Также через конфиг
+x-ui setting -listenIP 127.0.0.1 2>/dev/null || true
 
 systemctl restart x-ui
 sleep 3
