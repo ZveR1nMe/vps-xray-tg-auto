@@ -107,7 +107,7 @@ async def main() -> None:
     root_router.callback_query.middleware(AuthMiddleware(config.chat_id))
     dp.include_router(root_router)
 
-    session = aiohttp.ClientSession()
+    session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True))
     xui_client = XUIClient(config, session=session)
     await xui_client.login()
 
