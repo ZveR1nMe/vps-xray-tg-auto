@@ -53,7 +53,7 @@ class XUIClient:
         return body
 
     async def list_inbounds(self) -> list[dict]:
-        body = await self._request("POST", "/panel/api/inbounds/list")
+        body = await self._request("GET", "/panel/api/inbounds/list")
         return body.get("obj", [])
 
     async def add_client(self, inbound_id: int, uuid: str, email: str) -> bool:
@@ -82,7 +82,7 @@ class XUIClient:
 
     async def get_client_traffic(self, email: str) -> dict:
         body = await self._request(
-            "POST",
+            "GET",
             f"/panel/api/inbounds/getClientTraffics/{email}",
         )
         return body.get("obj", {})
