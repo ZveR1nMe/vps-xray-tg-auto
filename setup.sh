@@ -6,7 +6,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/vps-setup"
 XRAY_DIR="/opt/xray"
-REPO_URL="https://github.com/OWNER/REPO"  # TODO: заменить на реальный
+REPO_URL="https://github.com/ZveR1nMe/vps-xray-tg-auto"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $1"; }
