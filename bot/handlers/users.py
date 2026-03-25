@@ -78,7 +78,7 @@ async def cb_user_link(callback: CallbackQuery) -> None:
     await callback.message.delete()
     await callback.message.answer_photo(
         BufferedInputFile(buf.read(), filename=f"qr_{email}.png"),
-        caption=f"👤 <b>{email}</b>\n\n🔑 VPN:\n<code>{link}</code>\n\n📱 Прокси для Telegram:\n<code>{tg_proxy}</code>",
+        caption=f"👤 <b>{email}</b>\n\n🔑 VPN:\n<code>{link}</code>\n\n📱 Прокси для Telegram:\n<a href='{tg_proxy}'>Нажми чтобы подключить</a>",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -126,8 +126,7 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         caption=(
             f"✅ <b>{name}</b> добавлен!\n\n"
             f"🔑 VPN:\n<code>{link}</code>\n\n"
-            f"📱 Прокси для Telegram:\n<code>{tg_proxy}</code>\n\n"
-            f"QR — для VPN, кнопка «Прокси для Telegram» — подключит прокси в Telegram"
+            f"📱 Прокси для Telegram:\n<a href='{tg_proxy}'>Нажми чтобы подключить</a>"
         ),
         parse_mode="HTML",
         reply_markup=kb,
