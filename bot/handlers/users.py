@@ -112,7 +112,7 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         caption=(
             f"✅ <b>{name}</b> добавлен!\n\n"
             f"<code>{link}</code>\n\n"
-            f"Отсканируй QR или скопируй ссылку → Hiddify → «Буфер обмена»"
+            f"Отсканируй QR или скопируй ссылку → вставь в клиент"
         ),
         parse_mode="HTML",
         reply_markup=kb,
