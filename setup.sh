@@ -1,44 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# VPS Setup — чистый xray + Telegram бот
+# Установка: bash <(curl -sL https://raw.githubusercontent.com/OWNER/REPO/main/setup.sh)
+
 INSTALL_DIR="/opt/vps-setup"
-LOG_DIR="/var/log/vps-setup"
+XRAY_DIR="/opt/xray"
+REPO_URL="https://github.com/OWNER/REPO"  # TODO: заменить на реальный
 
-# Цвета
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[-]${NC} $1" >&2; }
 
 # --- Проверки ---
 
-if [[ $EUID -ne 0 ]]; then
-    err "Запустите от root: sudo bash setup.sh"
-    exit 1
-fi
-
-# --- Telegram credentials ---
-# Принимаем через env (от deploy.sh) или спрашиваем интерактивно
-
-if [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]]; then
-    echo ""
-    log "Настройка Telegram-бота"
-    echo "  1. Создайте бота: напишите @BotFather в Telegram → /newbot"
-    echo "  2. Узнайте свой Chat ID: напишите @userinfobot или @getmyid_bot"
-    echo ""
-
-    read -rp "Bot Token: " BOT_TOKEN
-    read -rp "Chat ID: " CHAT_ID
-
-    if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
-        err "Bot Token и Chat ID обязательны"
-        exit 1
-    fi
-fi
+if [[ $EUID -ne 0 ]]; then err "Запустите от root"; exit 1; fi
 
 if ! grep -qi ubuntu /etc/os-release 2>/dev/null; then
     err "Поддерживается только Ubuntu"
@@ -46,77 +23,63 @@ if ! grep -qi ubuntu /etc/os-release 2>/dev/null; then
 fi
 
 SERVER_IP=$(curl -s4 ifconfig.me || curl -s4 icanhazip.com)
-if [[ -z "$SERVER_IP" ]]; then
-    err "Не удалось определить IP сервера"
+if [[ -z "$SERVER_IP" ]]; then err "Не удалось определить IP"; exit 1; fi
+
+# --- Telegram credentials ---
+
+if [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]]; then
+    echo ""
+    log "Настройка Telegram-бота"
+    echo "  1. Создайте бота: @BotFather → /newbot → скопируйте токен"
+    echo "  2. Узнайте Chat ID: напишите @userinfobot"
+    echo ""
+    read -rp "Bot Token: " BOT_TOKEN
+    read -rp "Chat ID: " CHAT_ID
+    if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+        err "Bot Token и Chat ID обязательны"
+        exit 1
+    fi
+fi
+
+# --- Проверка Telegram ---
+
+log "Проверка Telegram..."
+RESPONSE=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d chat_id="$CHAT_ID" -d text="🟢 Установка VPS начата ($SERVER_IP)")
+if ! echo "$RESPONSE" | jq -e '.ok' > /dev/null 2>&1; then
+    err "Telegram: неверный токен или chat_id"
     exit 1
 fi
-
-log "IP сервера: $SERVER_IP"
-
-# --- Деинсталляция ---
-
-if [[ "${1:-}" == "--uninstall" ]]; then
-    log "Деинсталляция..."
-    systemctl stop vps-bot.service 2>/dev/null || true
-    systemctl disable vps-bot.service 2>/dev/null || true
-    rm -f /etc/systemd/system/vps-bot.service
-    systemctl daemon-reload
-
-    crontab -l 2>/dev/null | grep -v "vps-setup" | crontab - || true
-
-    read -rp "Удалить $INSTALL_DIR? [y/N] " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        rm -rf "$INSTALL_DIR"
-        log "Удалён $INSTALL_DIR"
-    fi
-
-    rm -rf "$LOG_DIR"
-
-    warn "Оставлены (удалите вручную при необходимости):"
-    warn "  - 3X-UI (x-ui uninstall)"
-    warn "  - UFW правила (ufw status)"
-    warn "  - SSH-конфиг (/etc/ssh/sshd_config)"
-    warn "  - sysctl настройки (/etc/sysctl.d/99-vps-setup.conf)"
-    warn "  - fail2ban (/etc/fail2ban/jail.local)"
-    log "Деинсталляция завершена"
-    exit 0
-fi
+log "Telegram OK"
 
 # --- Обновление системы ---
 
 log "Обновление системы..."
 export DEBIAN_FRONTEND=noninteractive
 apt update && apt upgrade -y
-apt install -y curl wget jq bc sqlite3 python3 python3-pip python3-venv ufw fail2ban unzip
+apt install -y curl wget jq bc python3 python3-pip python3-venv ufw fail2ban unzip
 
+# Автообновления безопасности
 apt install -y unattended-upgrades
 dpkg-reconfigure -plow unattended-upgrades
 
-# --- SSH-порт ---
+# --- SSH hardening ---
 
-if [[ -z "${SSH_PORT:-}" ]]; then
-    read -rp "SSH-порт (текущий: 22, Enter для 22): " SSH_PORT
-    SSH_PORT="${SSH_PORT:-22}"
-fi
-
-if [[ "$SSH_PORT" != "22" ]]; then
-    log "Смена SSH-порта на $SSH_PORT..."
-    sed -i "s/^#\?Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
-fi
+SSH_PORT="${SSH_PORT:-22}"
 
 sed -i 's/^#\?MaxAuthTries .*/MaxAuthTries 3/' /etc/ssh/sshd_config
 sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 
 if [[ -s ~/.ssh/authorized_keys ]]; then
     sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
-    log "Парольная аутентификация отключена (ключи найдены)"
+    log "Парольная аутентификация отключена"
 else
-    warn "authorized_keys пуст — парольная аутентификация оставлена"
+    warn "authorized_keys пуст — пароль оставлен"
 fi
 
 systemctl restart ssh || systemctl restart sshd
 
-# --- Файрвол ---
+# --- UFW ---
 
 log "Настройка UFW..."
 ufw default deny incoming
@@ -128,113 +91,62 @@ echo "y" | ufw enable
 # --- Fail2ban ---
 
 log "Настройка fail2ban..."
-cat > /etc/fail2ban/jail.local << 'JAIL'
+cat > /etc/fail2ban/jail.local << JAIL
 [sshd]
 enabled = true
-port = ssh
+port = $SSH_PORT
 filter = sshd
 logpath = /var/log/auth.log
 maxretry = 5
 bantime = 3600
 findtime = 600
 JAIL
-
-sed -i "s/^port = ssh/port = $SSH_PORT/" /etc/fail2ban/jail.local
 systemctl restart fail2ban
 
-# --- Сетевая оптимизация ---
+# --- BBR ---
 
-log "Оптимизация сети (BBR)..."
-cat > /etc/sysctl.d/99-vps-setup.conf << 'SYSCTL'
+log "Оптимизация сети..."
+cat > /etc/sysctl.d/99-vps.conf << 'SYSCTL'
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_fastopen = 3
-net.ipv4.tcp_max_syn_backlog = 8192
-net.core.somaxconn = 8192
 net.ipv4.ip_forward = 1
 SYSCTL
 sysctl --system > /dev/null
 
-# --- Проверка Telegram ---
+# --- Установка xray ---
 
-log "Проверка Telegram-бота..."
-RESPONSE=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-    -d chat_id="$CHAT_ID" \
-    -d text="🟢 VPS Setup запущен на $SERVER_IP")
+log "Установка xray..."
+mkdir -p "$XRAY_DIR"
 
-if ! echo "$RESPONSE" | jq -e '.ok' > /dev/null 2>&1; then
-    err "Не удалось отправить сообщение в Telegram. Проверьте BOT_TOKEN и CHAT_ID"
-    err "Ответ: $RESPONSE"
-    exit 1
-fi
-log "Telegram OK"
+# Скачиваем последнюю версию
+XRAY_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name')
+XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip"
+log "xray $XRAY_VERSION"
 
-# --- 3X-UI ---
+wget -qO /tmp/xray.zip "$XRAY_URL"
+unzip -o /tmp/xray.zip -d "$XRAY_DIR" > /dev/null
+chmod +x "$XRAY_DIR/xray"
+rm -f /tmp/xray.zip
 
-log "Установка 3X-UI..."
-# v2.8.11+ интерактивный. Ответы: y (установка), затем SSL-промпты.
-# Отправляем избыток ответов чтобы покрыть любые промпты — лишние игнорируются.
-yes | bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) || true
-
-# Ждём пока x-ui запустится
-sleep 5
-
-# --- Настройка credentials через SQLite (x-ui setting ненадёжен в v2.8.11) ---
-
-XUI_USER="admin_$(openssl rand -hex 4)"
-XUI_PASS="$(openssl rand -hex 12)"
-XUI_PATH="/panel-$(openssl rand -hex 8)/"
-
-# Создаём venv и ставим bcrypt для хеширования пароля
-mkdir -p "$INSTALL_DIR"
-python3 -m venv "$INSTALL_DIR/venv"
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
-"$INSTALL_DIR/venv/bin/pip" install bcrypt -q
-
-BCRYPT_HASH=$("$INSTALL_DIR/venv/bin/python3" -c "
-import bcrypt
-print(bcrypt.hashpw(b'${XUI_PASS}', bcrypt.gensalt()).decode())
-")
-
-# Обновляем credentials напрямую в БД
-sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username='${XUI_USER}', password='${BCRYPT_HASH}' WHERE id=1;"
-
-# Обновляем порт и path — UPDATE существующих + INSERT если нет
-sqlite3 /etc/x-ui/x-ui.db "
-DELETE FROM settings WHERE key IN ('webPort', 'webBasePath');
-INSERT INTO settings (key, value) VALUES ('webPort', '2053');
-INSERT INTO settings (key, value) VALUES ('webBasePath', '${XUI_PATH}');
-"
-
-systemctl restart x-ui
-sleep 5
-
-# Проверяем порт
-XUI_PORT=$(ss -tlnp | grep x-ui | grep -oP ':\K\d+' | head -1)
-if [[ -z "$XUI_PORT" ]]; then
-    err "3X-UI не запустился"
-    journalctl -u x-ui --no-pager -n 10
-    exit 1
-fi
-
-log "3X-UI установлен: user=$XUI_USER path=$XUI_PATH port=$XUI_PORT"
+# Скачиваем geo-файлы для России
+log "Скачиваю geo-файлы..."
+wget -qO "$XRAY_DIR/geoip.dat" "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat"
+wget -qO "$XRAY_DIR/geosite.dat" "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat"
 
 # --- SNI Selection ---
 
 log "Выбор лучшего SNI..."
-SNI_CANDIDATES=("www.microsoft.com" "www.google.com" "www.yahoo.com" "www.apple.com" "www.amazon.com")
-BEST_SNI="www.microsoft.com"
+SNI_CANDIDATES=("www.google.com" "www.microsoft.com" "www.yahoo.com" "www.apple.com")
+BEST_SNI="www.google.com"
 BEST_TIME=999
 
 for sni in "${SNI_CANDIDATES[@]}"; do
-    total=0
-    success=0
+    total=0; success=0
     for i in 1 2 3; do
         t=$(curl --connect-timeout 3 -s -o /dev/null -w "%{time_connect}" "https://$sni" 2>/dev/null || echo "999")
         total=$(echo "$total + $t" | bc)
-        if [[ "$t" != "999" ]]; then
-            ((success++)) || true
-        fi
+        [[ "$t" != "999" ]] && ((success++)) || true
     done
     if [[ $success -gt 0 ]]; then
         avg=$(echo "scale=4; $total / 3" | bc)
@@ -245,83 +157,126 @@ for sni in "${SNI_CANDIDATES[@]}"; do
         fi
     fi
 done
-
 log "Лучший SNI: $BEST_SNI"
 
 # --- Reality Keys ---
 
-XRAY_BIN="/usr/local/x-ui/bin/xray-linux-amd64"
-[[ ! -f "$XRAY_BIN" ]] && XRAY_BIN="/usr/local/x-ui/bin/xray"
-if [[ ! -f "$XRAY_BIN" ]]; then
-    err "xray binary не найден в /usr/local/x-ui/bin/"
-    ls -la /usr/local/x-ui/bin/ 2>/dev/null || true
-    exit 1
-fi
-
-KEYS_OUTPUT=$("$XRAY_BIN" x25519)
-# v2.8.11 выводит "PrivateKey: ..." и "Password: ..." (Password = public key)
-PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | head -1 | awk '{print $2}')
-PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | sed -n '2p' | awk '{print $2}')
+log "Генерация ключей..."
+KEYS_OUTPUT=$("$XRAY_DIR/xray" x25519)
+PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | grep "PrivateKey" | awk '{print $2}')
+PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | grep "Password" | awk '{print $2}')
 SHORT_ID=$(openssl rand -hex 4)
 
-log "Reality keys: public=$PUBLIC_KEY short_id=$SHORT_ID"
+log "Public Key: $PUBLIC_KEY"
 
-# --- Создание inbound через API (v2.8.11: /panel/api/) ---
+# --- xray config ---
 
-sleep 3
+log "Создание конфига xray..."
+mkdir -p "$INSTALL_DIR"/{data,logs}
 
-COOKIE_FILE=$(mktemp)
-curl -s -c "$COOKIE_FILE" -L "http://127.0.0.1:${XUI_PORT}${XUI_PATH}login" \
-    -d "username=$XUI_USER&password=$XUI_PASS" > /dev/null
-
-cat > /tmp/inbound.json << ENDJSON
+cat > "$INSTALL_DIR/xray-config.json" << XRAYCONF
 {
-  "up": 0, "down": 0, "total": 0, "remark": "vless-reality",
-  "enable": true, "expiryTime": 0,
-  "listen": "", "port": 443, "protocol": "vless",
-  "settings": "{\"clients\":[],\"decryption\":\"none\",\"fallbacks\":[]}",
-  "streamSettings": "{\"network\":\"tcp\",\"security\":\"reality\",\"realitySettings\":{\"show\":false,\"dest\":\"${BEST_SNI}:443\",\"xver\":0,\"serverNames\":[\"${BEST_SNI}\"],\"privateKey\":\"${PRIVATE_KEY}\",\"shortIds\":[\"${SHORT_ID}\"]},\"tcpSettings\":{\"header\":{\"type\":\"none\"}}}",
-  "sniffing": "{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"]}"
+  "log": {
+    "loglevel": "warning",
+    "access": "/opt/vps-setup/logs/xray-access.log",
+    "error": "/opt/vps-setup/logs/xray-error.log"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-reality",
+      "port": 443,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "${BEST_SNI}:443",
+          "xver": 0,
+          "serverNames": ["${BEST_SNI}"],
+          "privateKey": "${PRIVATE_KEY}",
+          "shortIds": ["${SHORT_ID}"]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
+    }
+  ]
 }
-ENDJSON
+XRAYCONF
 
-INBOUND_RESP=$(curl -s -b "$COOKIE_FILE" -L \
-    "http://127.0.0.1:${XUI_PORT}${XUI_PATH}panel/api/inbounds/add" \
-    -H "Content-Type: application/json" \
-    -d @/tmp/inbound.json)
+# --- systemd для xray ---
 
-rm -f "$COOKIE_FILE" /tmp/inbound.json
+cat > /etc/systemd/system/xray.service << 'SVC'
+[Unit]
+Description=Xray VLESS Reality
+After=network.target
 
-if ! echo "$INBOUND_RESP" | jq -e '.success' > /dev/null 2>&1; then
-    err "Не удалось создать inbound в 3X-UI"
-    err "Ответ: $INBOUND_RESP"
+[Service]
+Type=simple
+ExecStart=/opt/xray/xray run -c /opt/vps-setup/xray-config.json
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+systemctl daemon-reload
+systemctl enable xray
+systemctl start xray
+sleep 2
+
+if ! pgrep -f "xray" > /dev/null; then
+    err "xray не запустился"
+    journalctl -u xray --no-pager -n 10
     exit 1
 fi
-
-log "VLESS Reality inbound создан на порту 443"
+log "xray запущен на порту 443"
 
 # --- Python Bot ---
 
-log "Развёртывание Telegram-бота..."
-mkdir -p "$INSTALL_DIR"/{data/backups,logs}
+log "Установка бота..."
 
+# Скачиваем бот из репозитория (или копируем если запущен локально)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -d "$SCRIPT_DIR/bot" ]]; then
     cp -r "$SCRIPT_DIR/bot" "$INSTALL_DIR/"
 else
-    err "Директория bot/ не найдена рядом со скриптом"
-    exit 1
+    # Скачиваем из GitHub
+    wget -qO /tmp/repo.tar.gz "${REPO_URL}/archive/refs/heads/main.tar.gz"
+    tar -xzf /tmp/repo.tar.gz -C /tmp
+    cp -r /tmp/*/bot "$INSTALL_DIR/"
+    rm -rf /tmp/repo.tar.gz /tmp/*-main
 fi
 
-# venv уже создан выше (для bcrypt), доставляем зависимости бота
+python3 -m venv "$INSTALL_DIR/venv"
+"$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
 "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/bot/requirements.txt" -q
+
+# --- .env ---
 
 cat > "$INSTALL_DIR/.env" << ENVFILE
 BOT_TOKEN=$BOT_TOKEN
 CHAT_ID=$CHAT_ID
-XUI_USER=$XUI_USER
-XUI_PASS=$XUI_PASS
-XUI_PATH=$XUI_PATH
 SERVER_IP=$SERVER_IP
 PUBLIC_KEY=$PUBLIC_KEY
 SHORT_ID=$SHORT_ID
@@ -329,12 +284,12 @@ BEST_SNI=$BEST_SNI
 ENVFILE
 chmod 600 "$INSTALL_DIR/.env"
 
-# --- Systemd ---
+# --- systemd для бота ---
 
-cat > /etc/systemd/system/vps-bot.service << SERVICE
+cat > /etc/systemd/system/vps-bot.service << SVC
 [Unit]
 Description=VPS Telegram Bot
-After=network.target x-ui.service
+After=network.target xray.service
 
 [Service]
 Type=simple
@@ -346,15 +301,15 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-SERVICE
+SVC
 
 systemctl daemon-reload
-systemctl enable vps-bot.service
-systemctl start vps-bot.service
+systemctl enable vps-bot
+systemctl start vps-bot
 
 # --- Logrotate ---
 
-cat > /etc/logrotate.d/vps-setup << 'LOGROTATE'
+cat > /etc/logrotate.d/vps-setup << 'LR'
 /opt/vps-setup/logs/*.log {
     daily
     rotate 7
@@ -362,27 +317,20 @@ cat > /etc/logrotate.d/vps-setup << 'LOGROTATE'
     missingok
     notifempty
 }
-LOGROTATE
+LR
 
-# --- Итоговое сообщение ---
+# --- Готово ---
 
 log "=========================================="
 log "  Установка завершена!"
 log "=========================================="
 log ""
 log "  IP: $SERVER_IP"
-log "  SSH порт: $SSH_PORT"
-log "  3X-UI: http://127.0.0.1:2053$XUI_PATH"
-log "  Логин: $XUI_USER"
-log "  Пароль: $XUI_PASS"
-log ""
-log "  SSH-туннель к панели:"
-log "  ssh -L 2053:127.0.0.1:2053 -p $SSH_PORT root@$SERVER_IP"
-log ""
-log "  Reality SNI: $BEST_SNI"
+log "  Xray: VLESS + Reality на порту 443"
+log "  SNI: $BEST_SNI"
 log "  Public Key: $PUBLIC_KEY"
 log ""
-log "  Бот: @vps_dm_bot"
+log "  Бот: напишите /start в Telegram"
 log "=========================================="
 
 curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
@@ -391,8 +339,8 @@ curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
     -d text="✅ <b>VPS настроен!</b>
 
 🖥 IP: <code>$SERVER_IP</code>
-🔑 SSH: <code>ssh -p $SSH_PORT root@$SERVER_IP</code>
-🌐 Панель: <code>ssh -L 2053:127.0.0.1:2053 -p $SSH_PORT root@$SERVER_IP</code>
+🔑 SSH: <code>ssh root@$SERVER_IP</code>
+🌐 SNI: $BEST_SNI
+🔐 Public Key: <code>$PUBLIC_KEY</code>
 
-SNI: $BEST_SNI
-Public Key: <code>$PUBLIC_KEY</code>" > /dev/null
+Напишите /start боту для управления." > /dev/null
