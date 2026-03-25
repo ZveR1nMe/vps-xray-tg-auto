@@ -126,6 +126,12 @@ async def main() -> None:
     asyncio.create_task(_daily_backup(bot, config.chat_id))
     asyncio.create_task(_daily_update_check(bot, config.chat_id))
 
+    # Регистрируем кнопку меню в Telegram
+    from aiogram.types import BotCommand
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Главное меню"),
+    ])
+
     logger.info("Bot started successfully")
     await bot.send_message(config.chat_id, "🟢 Бот запущен!")
 

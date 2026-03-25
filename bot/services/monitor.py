@@ -54,6 +54,15 @@ async def _is_service_active(name: str) -> bool:
     return stdout.decode().strip() == "active"
 
 
+async def _is_process_running(pattern: str) -> bool:
+    proc = await asyncio.create_subprocess_exec(
+        "pgrep", "-f", pattern,
+        stdout=asyncio.subprocess.PIPE,
+    )
+    await proc.communicate()
+    return proc.returncode == 0
+
+
 class Monitor:
     """Фоновый мониторинг с алертами каждые 5 минут."""
 
@@ -92,7 +101,7 @@ class Monitor:
         disk = psutil.disk_usage("/").percent
 
         xui_active, xray_active = await asyncio.gather(
-            _is_service_active("x-ui"), _is_service_active("xray")
+            _is_service_active("x-ui"), _is_process_running("xray")
         )
 
         net = psutil.net_io_counters()
