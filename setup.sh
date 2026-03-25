@@ -169,6 +169,14 @@ SHORT_ID=$(openssl rand -hex 4)
 
 log "Public Key: $PUBLIC_KEY"
 
+# --- SOCKS5 прокси для Telegram ---
+
+SOCKS_PORT=$(shuf -i 10000-60000 -n 1)
+SOCKS_USER=$(openssl rand -hex 5)
+SOCKS_PASS=$(openssl rand -hex 5)
+log "SOCKS5 прокси: порт $SOCKS_PORT"
+ufw allow "$SOCKS_PORT"/tcp comment 'SOCKS5 Telegram'
+
 # --- xray config ---
 
 log "Создание конфига xray..."
@@ -206,6 +214,18 @@ cat > "$INSTALL_DIR/xray-config.json" << XRAYCONF
       "sniffing": {
         "enabled": true,
         "destOverride": ["http", "tls", "quic"]
+      }
+    },
+    {
+      "tag": "socks-proxy",
+      "port": ${SOCKS_PORT},
+      "listen": "0.0.0.0",
+      "protocol": "socks",
+      "settings": {
+        "auth": "password",
+        "accounts": [
+          {"user": "${SOCKS_USER}", "pass": "${SOCKS_PASS}"}
+        ]
       }
     }
   ],
@@ -281,6 +301,9 @@ SERVER_IP=$SERVER_IP
 PUBLIC_KEY=$PUBLIC_KEY
 SHORT_ID=$SHORT_ID
 BEST_SNI=$BEST_SNI
+SOCKS_PORT=$SOCKS_PORT
+SOCKS_USER=$SOCKS_USER
+SOCKS_PASS=$SOCKS_PASS
 ENVFILE
 chmod 600 "$INSTALL_DIR/.env"
 

@@ -61,8 +61,12 @@ async def cb_user_link(callback: CallbackQuery) -> None:
         await callback.answer("Пользователь не найден")
         return
 
+    from bot import deps
+    tg_proxy = deps.config.tg_proxy_link
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать", copy_text=CopyTextButton(text=link))],
+        [InlineKeyboardButton(text="📋 Скопировать VPN", copy_text=CopyTextButton(text=link))],
+        [InlineKeyboardButton(text="📱 Прокси для Telegram", url=tg_proxy)],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="users")],
     ])
 
@@ -74,7 +78,7 @@ async def cb_user_link(callback: CallbackQuery) -> None:
     await callback.message.delete()
     await callback.message.answer_photo(
         BufferedInputFile(buf.read(), filename=f"qr_{email}.png"),
-        caption=f"👤 <b>{email}</b>\n\n<code>{link}</code>",
+        caption=f"👤 <b>{email}</b>\n\n🔑 VPN:\n<code>{link}</code>\n\n📱 Прокси для Telegram:\n<code>{tg_proxy}</code>",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -103,8 +107,12 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
+    from bot import deps
+    tg_proxy = deps.config.tg_proxy_link
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=CopyTextButton(text=link))],
+        [InlineKeyboardButton(text="📋 Скопировать VPN", copy_text=CopyTextButton(text=link))],
+        [InlineKeyboardButton(text="📱 Прокси для Telegram", url=tg_proxy)],
         [InlineKeyboardButton(text="🔙 К пользователям", callback_data="users")],
     ])
 
@@ -117,8 +125,9 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         BufferedInputFile(buf.read(), filename=f"qr_{name}.png"),
         caption=(
             f"✅ <b>{name}</b> добавлен!\n\n"
-            f"<code>{link}</code>\n\n"
-            f"Отсканируй QR или скопируй ссылку → вставь в клиент"
+            f"🔑 VPN:\n<code>{link}</code>\n\n"
+            f"📱 Прокси для Telegram:\n<code>{tg_proxy}</code>\n\n"
+            f"QR — для VPN, кнопка «Прокси для Telegram» — подключит прокси в Telegram"
         ),
         parse_mode="HTML",
         reply_markup=kb,
