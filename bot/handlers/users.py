@@ -95,17 +95,28 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         name=name,
     )
 
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton, BufferedInputFile
+    import qrcode
+    import io
 
     copy_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=CopyTextButton(text=link))],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="users")],
     ])
 
-    await message.answer(
-        f"✅ Пользователь <b>{name}</b> добавлен!\n\n"
-        f"<code>{link}</code>\n\n"
-        f"Перешлите эту ссылку другу — он вставляет её в Hiddify через «Буфер обмена».",
+    # Генерируем QR-код
+    qr = qrcode.make(link)
+    buf = io.BytesIO()
+    qr.save(buf, format="PNG")
+    buf.seek(0)
+
+    await message.answer_photo(
+        BufferedInputFile(buf.read(), filename=f"qr_{name}.png"),
+        caption=(
+            f"✅ Пользователь <b>{name}</b> добавлен!\n\n"
+            f"<code>{link}</code>\n\n"
+            f"Отсканируй QR или скопируй ссылку → вставь в Hiddify через «Буфер обмена»."
+        ),
         parse_mode="HTML",
         reply_markup=copy_kb,
     )
