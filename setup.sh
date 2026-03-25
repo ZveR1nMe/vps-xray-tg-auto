@@ -172,31 +172,41 @@ log "Telegram OK"
 # --- 3X-UI ---
 
 log "Установка 3X-UI..."
-# Установщик v2.8.11+ интерактивный: y (подтверждение) → 3 (custom SSL) → Enter (пропуск cert) → Enter (пропуск key)
-# Панель доступна только через SSH-туннель, поэтому SSL не нужен
+# v2.8.11+ интерактивный: y → 3 (custom SSL, без сертификатов — панель через SSH-туннель)
 printf 'y\n3\n\n\n' | bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
-# Генерируем свои credentials и настройки
+# --- Настройка credentials через SQLite (x-ui setting ненадёжен в v2.8.11) ---
+
 XUI_USER="admin_$(openssl rand -hex 4)"
-XUI_PASS="$(openssl rand -base64 16)"
-XUI_PATH="/panel-$(openssl rand -hex 8)"
+XUI_PASS="$(openssl rand -base64 12 | tr -d '/+=')"
+XUI_PATH="/panel-$(openssl rand -hex 8)/"
 
-x-ui setting -username "$XUI_USER" -password "$XUI_PASS" 2>/dev/null
-x-ui setting -webBasePath "$XUI_PATH" 2>/dev/null
-x-ui setting -port 2053 2>/dev/null
+# Устанавливаем bcrypt в venv бота (создаём заранее)
+python3 -m venv "$INSTALL_DIR/venv"
+"$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
+"$INSTALL_DIR/venv/bin/pip" install bcrypt -q
 
-# Привязываем к localhost — только через SSH-туннель
-# Используем sqlite3 напрямую, т.к. x-ui setting -listen может не работать
-if command -v sqlite3 &>/dev/null; then
-    sqlite3 /etc/x-ui/x-ui.db "UPDATE inbounds SET listen = '127.0.0.1' WHERE 1=1;" 2>/dev/null || true
-fi
-# Также через конфиг
-x-ui setting -listenIP 127.0.0.1 2>/dev/null || true
+# Генерируем bcrypt-хеш пароля
+BCRYPT_HASH=$("$INSTALL_DIR/venv/bin/python3" -c "
+import bcrypt
+print(bcrypt.hashpw(b'''${XUI_PASS}''', bcrypt.gensalt()).decode())
+")
+
+# Обновляем credentials, порт, base path напрямую в БД
+sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username='${XUI_USER}', password='${BCRYPT_HASH}' WHERE id=1;"
+sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webPort', '2053');"
+sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '${XUI_PATH}');"
 
 systemctl restart x-ui
 sleep 3
 
-log "3X-UI установлен: user=$XUI_USER path=$XUI_PATH"
+# Проверяем что панель слушает
+XUI_PORT=$(ss -tlnp | grep x-ui | grep -oP ':\K\d+' | head -1)
+if [[ "$XUI_PORT" != "2053" ]]; then
+    warn "Панель на порту $XUI_PORT вместо 2053"
+fi
+
+log "3X-UI установлен: user=$XUI_USER path=$XUI_PATH port=$XUI_PORT"
 
 # --- SNI Selection ---
 
@@ -236,23 +246,24 @@ if [[ ! -f "$XRAY_BIN" ]]; then
     ls -la /usr/local/x-ui/bin/ 2>/dev/null || true
     exit 1
 fi
-log "Xray: $XRAY_BIN"
+
 KEYS_OUTPUT=$("$XRAY_BIN" x25519)
-PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | grep "Private" | awk '{print $3}')
-PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | grep "Public" | awk '{print $3}')
+# v2.8.11 выводит "PrivateKey: ..." и "Password: ..." (Password = public key)
+PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | head -1 | awk '{print $2}')
+PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | sed -n '2p' | awk '{print $2}')
 SHORT_ID=$(openssl rand -hex 4)
 
-log "Reality keys сгенерированы"
+log "Reality keys: public=$PUBLIC_KEY short_id=$SHORT_ID"
 
-# --- Конфиг inbound через API ---
+# --- Создание inbound через API (v2.8.11: /panel/api/) ---
 
-sleep 5
+sleep 3
 
 COOKIE_FILE=$(mktemp)
-curl -s -c "$COOKIE_FILE" "http://127.0.0.1:2053${XUI_PATH}/login" \
+curl -s -c "$COOKIE_FILE" -L "http://127.0.0.1:${XUI_PORT}${XUI_PATH}login" \
     -d "username=$XUI_USER&password=$XUI_PASS" > /dev/null
 
-INBOUND_JSON=$(cat << ENDJSON
+cat > /tmp/inbound.json << ENDJSON
 {
   "up": 0, "down": 0, "total": 0, "remark": "vless-reality",
   "enable": true, "expiryTime": 0,
@@ -262,14 +273,13 @@ INBOUND_JSON=$(cat << ENDJSON
   "sniffing": "{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"]}"
 }
 ENDJSON
-)
 
-INBOUND_RESP=$(curl -s -b "$COOKIE_FILE" \
-    "http://127.0.0.1:2053${XUI_PATH}/xui/API/inbounds/add" \
+INBOUND_RESP=$(curl -s -b "$COOKIE_FILE" -L \
+    "http://127.0.0.1:${XUI_PORT}${XUI_PATH}panel/api/inbounds/add" \
     -H "Content-Type: application/json" \
-    -d "$INBOUND_JSON")
+    -d @/tmp/inbound.json)
 
-rm -f "$COOKIE_FILE"
+rm -f "$COOKIE_FILE" /tmp/inbound.json
 
 if ! echo "$INBOUND_RESP" | jq -e '.success' > /dev/null 2>&1; then
     err "Не удалось создать inbound в 3X-UI"
@@ -292,9 +302,8 @@ else
     exit 1
 fi
 
-python3 -m venv "$INSTALL_DIR/venv"
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/bot/requirements.txt"
+# venv уже создан выше (для bcrypt), доставляем зависимости бота
+"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/bot/requirements.txt" -q
 
 cat > "$INSTALL_DIR/.env" << ENVFILE
 BOT_TOKEN=$BOT_TOKEN

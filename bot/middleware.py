@@ -18,7 +18,12 @@ class AuthMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        # Message имеет event.chat, CallbackQuery имеет event.message.chat
         chat = getattr(event, "chat", None)
+        if chat is None:
+            message = getattr(event, "message", None)
+            if message is not None:
+                chat = getattr(message, "chat", None)
         if chat is None or chat.id != self.allowed_chat_id:
             return None
         return await handler(event, data)
