@@ -46,6 +46,8 @@ async def _do_update() -> tuple[bool, str]:
     ROLLBACK_DIR.mkdir(parents=True, exist_ok=True)
     if XUI_DB_PATH.exists():
         shutil.copy2(XUI_DB_PATH, ROLLBACK_DIR / "x-ui.db.bak")
+    if XUI_BIN_PATH.exists():
+        shutil.copytree(XUI_BIN_PATH, ROLLBACK_DIR / "x-ui-bin-bak", dirs_exist_ok=True)
 
     proc = await asyncio.create_subprocess_exec(
         "bash", "-c",
@@ -67,6 +69,8 @@ async def _do_update() -> tuple[bool, str]:
     if stdout.decode().strip() != "active":
         if (ROLLBACK_DIR / "x-ui.db.bak").exists():
             shutil.copy2(ROLLBACK_DIR / "x-ui.db.bak", XUI_DB_PATH)
+        if (ROLLBACK_DIR / "x-ui-bin-bak").exists():
+            shutil.copytree(ROLLBACK_DIR / "x-ui-bin-bak", XUI_BIN_PATH, dirs_exist_ok=True)
             await asyncio.create_subprocess_exec("systemctl", "restart", "x-ui")
             await asyncio.sleep(5)
 

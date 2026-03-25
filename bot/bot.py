@@ -16,13 +16,15 @@ from bot.middleware import AuthMiddleware
 from bot.services.monitor import Monitor
 from bot.services.xui_api import XUIClient
 
+_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+_log_dir = Path("/opt/vps-setup/logs")
+if _log_dir.exists():
+    _log_handlers.append(logging.FileHandler(_log_dir / "bot.log"))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("/opt/vps-setup/logs/bot.log"),
-    ],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 

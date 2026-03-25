@@ -235,12 +235,18 @@ INBOUND_JSON=$(cat << ENDJSON
 ENDJSON
 )
 
-curl -s -b "$COOKIE_FILE" \
+INBOUND_RESP=$(curl -s -b "$COOKIE_FILE" \
     "http://127.0.0.1:2053${XUI_PATH}/xui/API/inbounds/add" \
     -H "Content-Type: application/json" \
-    -d "$INBOUND_JSON" > /dev/null
+    -d "$INBOUND_JSON")
 
 rm -f "$COOKIE_FILE"
+
+if ! echo "$INBOUND_RESP" | jq -e '.success' > /dev/null 2>&1; then
+    err "Не удалось создать inbound в 3X-UI"
+    err "Ответ: $INBOUND_RESP"
+    exit 1
+fi
 
 log "VLESS Reality inbound создан на порту 443"
 
