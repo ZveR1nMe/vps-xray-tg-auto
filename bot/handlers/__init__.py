@@ -7,6 +7,7 @@ from bot.handlers.users import router as users_router
 from bot.handlers.traffic import router as traffic_router
 from bot.handlers.diagnostics import router as diagnostics_router
 from bot.handlers.backup import router as backup_router
+from bot.handlers.tips import router as tips_router
 
 
 def register_all_routers() -> Router:
@@ -19,4 +20,5 @@ def register_all_routers() -> Router:
     root.include_router(traffic_router)
     root.include_router(diagnostics_router)
     root.include_router(backup_router)
+    root.include_router(tips_router)
     return root
