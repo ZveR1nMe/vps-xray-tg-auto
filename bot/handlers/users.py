@@ -43,7 +43,8 @@ async def cb_users(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "users_list")
 async def cb_users_list(callback: CallbackQuery) -> None:
-    xui = callback.bot["xui_client"]
+    from bot import deps
+    xui = deps.xui_client
     inbounds = await xui.list_inbounds()
     clients = []
     for ib in inbounds:
@@ -69,8 +70,9 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         await message.answer("Имя не может быть пустым. Попробуйте ещё раз:")
         return
 
-    xui = message.bot["xui_client"]
-    link_gen = message.bot["link_gen_params"]
+    from bot import deps
+    xui = deps.xui_client
+    link_gen = deps.link_gen_params
 
     client_uuid = str(uuid_mod.uuid4())
     inbounds = await xui.list_inbounds()
@@ -124,7 +126,8 @@ async def on_delete_name(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("del_confirm:"))
 async def cb_del_confirm(callback: CallbackQuery) -> None:
     email = callback.data.split(":", 1)[1]
-    xui = callback.bot["xui_client"]
+    from bot import deps
+    xui = deps.xui_client
 
     inbounds = await xui.list_inbounds()
     deleted = False

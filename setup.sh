@@ -229,7 +229,15 @@ log "Лучший SNI: $BEST_SNI"
 
 # --- Reality Keys ---
 
-KEYS_OUTPUT=$(xray x25519)
+XRAY_BIN="/usr/local/x-ui/bin/xray-linux-amd64"
+[[ ! -f "$XRAY_BIN" ]] && XRAY_BIN="/usr/local/x-ui/bin/xray"
+if [[ ! -f "$XRAY_BIN" ]]; then
+    err "xray binary не найден в /usr/local/x-ui/bin/"
+    ls -la /usr/local/x-ui/bin/ 2>/dev/null || true
+    exit 1
+fi
+log "Xray: $XRAY_BIN"
+KEYS_OUTPUT=$("$XRAY_BIN" x25519)
 PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | grep "Private" | awk '{print $3}')
 PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | grep "Public" | awk '{print $3}')
 SHORT_ID=$(openssl rand -hex 4)

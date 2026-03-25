@@ -19,7 +19,8 @@ def _format_bytes(b: int) -> str:
 
 @router.callback_query(lambda c: c.data == "traffic")
 async def cb_traffic(callback: CallbackQuery) -> None:
-    xui = callback.bot["xui_client"]
+    from bot import deps
+    xui = deps.xui_client
     inbounds = await xui.list_inbounds()
 
     lines = ["📈 <b>Трафик по пользователям</b>\n"]

@@ -21,7 +21,7 @@ class XUIClient:
     def __init__(self, config: Config, session: ClientSession) -> None:
         self._config = config
         self._session = session
-        self._base = config.xui_base_url
+        self._base = config.xui_base_url.rstrip("/")
         self._logged_in = False
 
     async def login(self) -> None:
@@ -53,7 +53,7 @@ class XUIClient:
         return body
 
     async def list_inbounds(self) -> list[dict]:
-        body = await self._request("POST", "/xui/API/inbounds/list")
+        body = await self._request("POST", "/panel/api/inbounds/list")
         return body.get("obj", [])
 
     async def add_client(self, inbound_id: int, uuid: str, email: str) -> bool:
@@ -68,7 +68,7 @@ class XUIClient:
         })
         await self._request(
             "POST",
-            "/xui/API/inbounds/addClient",
+            "/panel/api/inbounds/addClient",
             data={"id": inbound_id, "settings": settings},
         )
         return True
@@ -76,17 +76,17 @@ class XUIClient:
     async def delete_client(self, inbound_id: int, client_uuid: str) -> bool:
         await self._request(
             "POST",
-            f"/xui/API/inbounds/{inbound_id}/delClient/{client_uuid}",
+            f"/panel/api/inbounds/{inbound_id}/delClient/{client_uuid}",
         )
         return True
 
     async def get_client_traffic(self, email: str) -> dict:
         body = await self._request(
             "POST",
-            f"/xui/API/inbounds/getClientTraffics/{email}",
+            f"/panel/api/inbounds/getClientTraffics/{email}",
         )
         return body.get("obj", {})
 
     async def server_status(self) -> dict:
-        body = await self._request("GET", "/server/status")
+        body = await self._request("GET", "/panel/api/server/status")
         return body.get("obj", {})

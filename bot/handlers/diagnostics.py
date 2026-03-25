@@ -86,7 +86,8 @@ async def _check_xray_running() -> bool:
 async def cb_diagnostics(callback: CallbackQuery) -> None:
     await callback.answer("⏳ Запускаю диагностику...")
 
-    config = callback.bot["config"]
+    from bot import deps
+    config = deps.config
     lines = ["🔍 <b>Диагностика</b>\n"]
 
     xray_ok = await _check_xray_running()

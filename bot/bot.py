@@ -111,9 +111,10 @@ async def main() -> None:
     xui_client = XUIClient(config, session=session)
     await xui_client.login()
 
-    bot["config"] = config
-    bot["xui_client"] = xui_client
-    bot["link_gen_params"] = {
+    from bot import deps
+    deps.config = config
+    deps.xui_client = xui_client
+    deps.link_gen_params = {
         "server_ip": config.server_ip,
         "public_key": config.public_key,
         "short_id": config.short_id,
