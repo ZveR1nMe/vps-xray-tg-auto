@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import uuid as uuid_mod
@@ -99,3 +100,40 @@ class XrayManager:
         )
         fragment = quote(name, safe="")
         return f"vless://{client_uuid}@{self._server_ip}:443?{params}#{fragment}"
+
+    @staticmethod
+    def get_happ_routing_link() -> str:
+        """Генерирует happ://routing/add/ deep link с split-tunneling для РФ."""
+        profile = {
+            "Name": "VPS Split-Tunnel RU",
+            "GlobalProxy": "true",
+            "RemoteDNSType": "DoH",
+            "RemoteDNSDomain": "https://dns.google/dns-query",
+            "RemoteDNSIP": "8.8.8.8",
+            "DomesticDNSType": "DoH",
+            "DomesticDNSDomain": "https://common.dot.dns.yandex.net/dns-query",
+            "DomesticDNSIP": "77.88.8.8",
+            "Geoipurl": "",
+            "Geositeurl": "",
+            "LastUpdated": "",
+            "DnsHosts": {},
+            "DirectSites": [
+                "geosite:category-ru",
+                "geosite:geolocation-ru",
+            ],
+            "DirectIp": [
+                "geoip:ru",
+                "geoip:private",
+            ],
+            "ProxySites": [],
+            "ProxyIp": [],
+            "BlockSites": [
+                "geosite:category-ads-all",
+            ],
+            "BlockIp": [],
+            "DomainStrategy": "IPIfNonMatch",
+            "FakeDNS": "false",
+        }
+        json_str = json.dumps(profile, indent=4, ensure_ascii=False)
+        b64 = base64.b64encode(json_str.encode()).decode()
+        return f"happ://routing/add/{b64}"

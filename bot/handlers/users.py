@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import io
+import functools
 
 import qrcode
 from aiogram import F, Router
@@ -14,6 +14,14 @@ from aiogram.types import (
 
 router = Router()
 
+HAPP_DOWNLOAD_TEXT = (
+    "📲 <b>Скачать Happ:</b>\n"
+    "• <a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>iOS (App Store RU)</a>\n"
+    "• <a href='https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk'>Android (APK)</a>\n"
+    "• <a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg'>macOS</a>\n"
+    "• <a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe'>Windows</a>"
+)
+
 
 class AddUser(StatesGroup):
     waiting_name = State()
@@ -22,6 +30,58 @@ class AddUser(StatesGroup):
 def _get_mgr():
     from bot import deps
     return deps.xray_mgr
+
+
+def _get_tg_proxy() -> str:
+    from bot import deps
+    return deps.config.tg_proxy_link
+
+
+@functools.cache
+def _get_routing_link() -> str:
+    from bot.services.xray_manager import XrayManager
+    return XrayManager.get_happ_routing_link()
+
+
+async def _send_user_card(
+    send_photo,
+    send_text,
+    name: str,
+    link: str,
+    caption_prefix: str,
+    back_callback: str,
+) -> None:
+    """Отправляет QR + ссылки + роутинг + скачивание."""
+    tg_proxy = _get_tg_proxy()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Скопировать VPN", copy_text=CopyTextButton(text=link))],
+        [InlineKeyboardButton(text="📱 Прокси для Telegram", url=tg_proxy)],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback)],
+    ])
+
+    qr = qrcode.make(link)
+    buf = io.BytesIO()
+    qr.save(buf, format="PNG")
+    buf.seek(0)
+
+    await send_photo(
+        BufferedInputFile(buf.read(), filename=f"qr_{name}.png"),
+        caption=(
+            f"{caption_prefix}\n\n"
+            f"🔑 VPN:\n<code>{link}</code>\n\n"
+            f"📱 Прокси для Telegram:\n<a href='{tg_proxy}'>Нажми чтобы подключить</a>"
+        ),
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await send_text(
+        f"⚡ <b>Роутинг для Happ (split-tunnel):</b>\n"
+        f"<code>{_get_routing_link()}</code>\n\n"
+        f"{HAPP_DOWNLOAD_TEXT}",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 @router.callback_query(F.data == "users")
@@ -61,26 +121,14 @@ async def cb_user_link(callback: CallbackQuery) -> None:
         await callback.answer("Пользователь не найден")
         return
 
-    from bot import deps
-    tg_proxy = deps.config.tg_proxy_link
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать VPN", copy_text=CopyTextButton(text=link))],
-        [InlineKeyboardButton(text="📱 Прокси для Telegram", url=tg_proxy)],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="users")],
-    ])
-
-    qr = qrcode.make(link)
-    buf = io.BytesIO()
-    qr.save(buf, format="PNG")
-    buf.seek(0)
-
     await callback.message.delete()
-    await callback.message.answer_photo(
-        BufferedInputFile(buf.read(), filename=f"qr_{email}.png"),
-        caption=f"👤 <b>{email}</b>\n\n🔑 VPN:\n<code>{link}</code>\n\n📱 Прокси для Telegram:\n<a href='{tg_proxy}'>Нажми чтобы подключить</a>",
-        parse_mode="HTML",
-        reply_markup=kb,
+    await _send_user_card(
+        send_photo=callback.message.answer_photo,
+        send_text=callback.message.answer,
+        name=email,
+        link=link,
+        caption_prefix=f"👤 <b>{email}</b>",
+        back_callback="users",
     )
     await callback.answer()
 
@@ -107,29 +155,13 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    from bot import deps
-    tg_proxy = deps.config.tg_proxy_link
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать VPN", copy_text=CopyTextButton(text=link))],
-        [InlineKeyboardButton(text="📱 Прокси для Telegram", url=tg_proxy)],
-        [InlineKeyboardButton(text="🔙 К пользователям", callback_data="users")],
-    ])
-
-    qr = qrcode.make(link)
-    buf = io.BytesIO()
-    qr.save(buf, format="PNG")
-    buf.seek(0)
-
-    await message.answer_photo(
-        BufferedInputFile(buf.read(), filename=f"qr_{name}.png"),
-        caption=(
-            f"✅ <b>{name}</b> добавлен!\n\n"
-            f"🔑 VPN:\n<code>{link}</code>\n\n"
-            f"📱 Прокси для Telegram:\n<a href='{tg_proxy}'>Нажми чтобы подключить</a>"
-        ),
-        parse_mode="HTML",
-        reply_markup=kb,
+    await _send_user_card(
+        send_photo=message.answer_photo,
+        send_text=message.answer,
+        name=name,
+        link=link,
+        caption_prefix=f"✅ <b>{name}</b> добавлен!",
+        back_callback="users",
     )
     await state.clear()
 

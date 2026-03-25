@@ -5,15 +5,22 @@ router = Router()
 
 TIPS_TEXT = (
     "💡 <b>Как подключиться</b>\n\n"
-    "1. Установи любой клиент с поддержкой VLESS+Reality:\n"
+    "<b>Рекомендуемый клиент — Happ:</b>\n"
+    "   • <a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>Happ</a> (iOS — App Store RU)\n"
+    "   • <a href='https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk'>Happ</a> (Android — APK)\n"
+    "   • <a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg'>Happ</a> (macOS)\n"
+    "   • <a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe'>Happ</a> (Windows)\n\n"
+    "<b>Шаг 1 — Добавь сервер:</b>\n"
+    "Скопируй <code>vless://</code> ссылку (кнопка 📋)\n"
+    "В Happ → Добавить → Вставить из буфера\n\n"
+    "<b>Шаг 2 — Настрой роутинг:</b>\n"
+    "Нажми 📥 Роутинг для Happ\n"
+    "Скопируй ссылку → открой в браузере\n"
+    "🇷🇺 Российские сайты пойдут напрямую!\n\n"
+    "<b>Другие клиенты:</b>\n"
     "   • <a href='https://github.com/MatsuriDayo/NekoBoxForAndroid/releases'>NekoBox</a> (Android)\n"
     "   • <a href='https://apps.apple.com/app/streisand/id6450534064'>Streisand</a> (iOS)\n"
-    "   • <a href='https://github.com/netchx/netch/releases'>Netch</a> (Windows)\n"
     "   • <a href='https://github.com/MatsuriDayo/nekoray/releases'>Nekoray</a> (Windows / Linux)\n"
-    "   • <a href='https://apps.apple.com/app/v2box-v2ray-client/id6446814690'>V2Box</a> (macOS / iOS)\n\n"
-    "2. Скопируй <code>vless://</code> ссылку из бота (кнопка 📋)\n\n"
-    "3. В клиенте добавь профиль из буфера обмена или отсканируй QR\n\n"
-    "4. Подключись ▶"
 )
 
 
