@@ -42,7 +42,13 @@ async def cb_users(callback: CallbackQuery) -> None:
     ])
 
     text = f"👥 <b>Пользователи ({len(clients)})</b>" if clients else "👥 Нет пользователей"
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.delete()
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
