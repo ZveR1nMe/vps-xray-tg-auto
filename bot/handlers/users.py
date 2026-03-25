@@ -95,12 +95,19 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         name=name,
     )
 
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
+
+    copy_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=CopyTextButton(text=link))],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="users")],
+    ])
+
     await message.answer(
         f"✅ Пользователь <b>{name}</b> добавлен!\n\n"
         f"<code>{link}</code>\n\n"
         f"Перешлите эту ссылку другу — он вставляет её в Hiddify через «Буфер обмена».",
         parse_mode="HTML",
-        reply_markup=users_menu(),
+        reply_markup=copy_kb,
     )
     await state.clear()
 
