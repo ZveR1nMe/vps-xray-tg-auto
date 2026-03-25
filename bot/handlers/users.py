@@ -164,19 +164,28 @@ async def cb_del_confirm(callback: CallbackQuery) -> None:
 
     inbounds = await xui.list_inbounds()
     deleted = False
+    error_msg = ""
     for ib in inbounds:
         for client in parse_clients(ib):
             if client["email"] == email:
-                await xui.delete_client(ib["id"], client["id"])
-                deleted = True
+                try:
+                    await xui.delete_client(ib["id"], client["id"])
+                    deleted = True
+                except Exception as e:
+                    error_msg = str(e)
                 break
-        if deleted:
+        if deleted or error_msg:
             break
 
     if deleted:
         await callback.answer(f"✅ {email} удалён")
-        # Возвращаемся в список
         await cb_users_list(callback)
+    elif error_msg:
+        await callback.message.edit_text(
+            f"❌ Не удалось удалить {email}\n\n{error_msg}",
+            reply_markup=users_menu(),
+        )
+        await callback.answer()
     else:
         await callback.message.edit_text(f"❌ Пользователь {email} не найден", reply_markup=users_menu())
         await callback.answer()
