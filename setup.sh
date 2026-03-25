@@ -114,7 +114,7 @@ else
     warn "authorized_keys пуст — парольная аутентификация оставлена"
 fi
 
-systemctl restart sshd
+systemctl restart ssh || systemctl restart sshd
 
 # --- Файрвол ---
 
