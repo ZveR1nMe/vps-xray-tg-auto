@@ -392,20 +392,97 @@ log "xray запущен на порту 443"
 
 fi  # end VLESS
 
-# --- Fallback-переменные если VLESS не установлен ---
+# --- AmneziaWG 2.0 ---
 
-if [[ "$INSTALL_MODE" == "awg" ]]; then
-    PUBLIC_KEY=""
-    SHORT_ID=""
-    BEST_SNI=""
-    BEST_REMOTE_DOH=""
-    BEST_REMOTE_DOH_IP=""
-    BEST_DOMESTIC_DOH=""
-    BEST_DOMESTIC_DOH_IP=""
-    SOCKS_PORT=""
-    SOCKS_USER=""
-    SOCKS_PASS=""
+if [[ "$INSTALL_MODE" == "awg" || "$INSTALL_MODE" == "both" ]]; then
+
+log "Установка AmneziaWG 2.0..."
+
+# PPA
+add-apt-repository -y ppa:amnezia/ppa
+apt update -qq
+apt install -y amneziawg amneziawg-dkms amneziawg-tools
+
+# Определение сетевого интерфейса
+NET_IFACE=$(ip route show default | awk '{print $5}' | head -1)
+if [[ -z "$NET_IFACE" ]]; then
+    err "Не удалось определить сетевой интерфейс"
+    exit 1
 fi
+log "Сетевой интерфейс: $NET_IFACE"
+
+# Генерация ключей
+AWG_SERVER_PRIVKEY=$(awg genkey)
+AWG_SERVER_PUBKEY=$(echo "$AWG_SERVER_PRIVKEY" | awg pubkey)
+
+# Рандомный UDP порт
+AWG_PORT=$(shuf -i 10000-60000 -n 1)
+log "AWG порт: $AWG_PORT"
+
+# Параметры обфускации
+AWG_JC=4
+AWG_JMIN=40
+AWG_JMAX=70
+AWG_S1=52
+AWG_S2=52
+AWG_H1=1
+AWG_H2=2
+AWG_H3=3
+AWG_H4=4
+
+# Конфиг сервера
+mkdir -p /etc/amneziawg
+cat > /etc/amneziawg/awg0.conf << AWGCONF
+[Interface]
+PrivateKey = ${AWG_SERVER_PRIVKEY}
+Address = 10.8.1.1/24
+ListenPort = ${AWG_PORT}
+PostUp = iptables -A FORWARD -i awg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ${NET_IFACE} -j MASQUERADE
+PostDown = iptables -D FORWARD -i awg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ${NET_IFACE} -j MASQUERADE
+Jc = ${AWG_JC}
+Jmin = ${AWG_JMIN}
+Jmax = ${AWG_JMAX}
+S1 = ${AWG_S1}
+S2 = ${AWG_S2}
+H1 = ${AWG_H1}
+H2 = ${AWG_H2}
+H3 = ${AWG_H3}
+H4 = ${AWG_H4}
+AWGCONF
+chmod 600 /etc/amneziawg/awg0.conf
+
+# UFW
+ufw allow ${AWG_PORT}/udp comment 'AmneziaWG'
+
+# Systemd
+cat > /etc/systemd/system/awg-quick@.service << 'SVC'
+[Unit]
+Description=AmneziaWG Tunnel %i
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/awg-quick up /etc/amneziawg/%i.conf
+ExecStop=/usr/bin/awg-quick down /etc/amneziawg/%i.conf
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+systemctl daemon-reload
+systemctl enable awg-quick@awg0
+systemctl start awg-quick@awg0
+sleep 2
+
+if ! awg show awg0 > /dev/null 2>&1; then
+    err "AmneziaWG не запустился"
+    journalctl -u awg-quick@awg0 --no-pager -n 10
+    exit 1
+fi
+log "AmneziaWG запущен на порту $AWG_PORT (UDP)"
+
+fi  # end AWG
 
 # --- Python Bot ---
 
@@ -433,6 +510,11 @@ cat > "$INSTALL_DIR/.env" << ENVFILE
 BOT_TOKEN=$BOT_TOKEN
 CHAT_ID=$CHAT_ID
 SERVER_IP=$SERVER_IP
+INSTALL_MODE=$INSTALL_MODE
+ENVFILE
+
+if [[ "$INSTALL_MODE" == "vless" || "$INSTALL_MODE" == "both" ]]; then
+cat >> "$INSTALL_DIR/.env" << ENVFILE
 PUBLIC_KEY=$PUBLIC_KEY
 SHORT_ID=$SHORT_ID
 BEST_SNI=$BEST_SNI
@@ -444,6 +526,25 @@ SOCKS_PORT=$SOCKS_PORT
 SOCKS_USER=$SOCKS_USER
 SOCKS_PASS=$SOCKS_PASS
 ENVFILE
+fi
+
+if [[ "$INSTALL_MODE" == "awg" || "$INSTALL_MODE" == "both" ]]; then
+cat >> "$INSTALL_DIR/.env" << ENVFILE
+AWG_PORT=$AWG_PORT
+AWG_SERVER_PUBKEY=$AWG_SERVER_PUBKEY
+AWG_JC=$AWG_JC
+AWG_JMIN=$AWG_JMIN
+AWG_JMAX=$AWG_JMAX
+AWG_S1=$AWG_S1
+AWG_S2=$AWG_S2
+AWG_H1=$AWG_H1
+AWG_H2=$AWG_H2
+AWG_H3=$AWG_H3
+AWG_H4=$AWG_H4
+AWG_CONFIG=/etc/amneziawg/awg0.conf
+ENVFILE
+fi
+
 chmod 600 "$INSTALL_DIR/.env"
 
 # --- systemd для бота ---
@@ -488,21 +589,41 @@ log "  Установка завершена!"
 log "=========================================="
 log ""
 log "  IP: $SERVER_IP"
-log "  Xray: VLESS + Reality на порту 443"
-log "  SNI: $BEST_SNI"
-log "  Public Key: $PUBLIC_KEY"
+log "  Режим: $INSTALL_MODE"
+if [[ "$INSTALL_MODE" == "vless" || "$INSTALL_MODE" == "both" ]]; then
+    log "  Xray: VLESS + Reality на порту 443"
+    log "  SNI: $BEST_SNI"
+    log "  Public Key: $PUBLIC_KEY"
+fi
+if [[ "$INSTALL_MODE" == "awg" || "$INSTALL_MODE" == "both" ]]; then
+    log "  AmneziaWG: порт $AWG_PORT (UDP)"
+    log "  AWG Public Key: $AWG_SERVER_PUBKEY"
+fi
 log ""
 log "  Бот: напишите /start в Telegram"
 log "=========================================="
 
-curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-    -d chat_id="$CHAT_ID" \
-    -d parse_mode="HTML" \
-    -d text="✅ <b>VPS настроен!</b>
+TG_MSG="✅ <b>VPS настроен!</b>
 
 🖥 IP: <code>$SERVER_IP</code>
 🔑 SSH: <code>ssh root@$SERVER_IP</code>
-🌐 SNI: $BEST_SNI
-🔐 Public Key: <code>$PUBLIC_KEY</code>
+📋 Режим: $INSTALL_MODE"
 
-Напишите /start боту для управления." > /dev/null
+if [[ "$INSTALL_MODE" == "vless" || "$INSTALL_MODE" == "both" ]]; then
+    TG_MSG+="
+🌐 SNI: $BEST_SNI
+🔐 VLESS Key: <code>$PUBLIC_KEY</code>"
+fi
+if [[ "$INSTALL_MODE" == "awg" || "$INSTALL_MODE" == "both" ]]; then
+    TG_MSG+="
+🛡 AWG: порт $AWG_PORT
+🔐 AWG Key: <code>$AWG_SERVER_PUBKEY</code>"
+fi
+TG_MSG+="
+
+Напишите /start боту для управления."
+
+curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d chat_id="$CHAT_ID" \
+    -d parse_mode="HTML" \
+    -d text="$TG_MSG" > /dev/null
