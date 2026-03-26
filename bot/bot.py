@@ -83,6 +83,14 @@ async def main() -> None:
             h4=config.awg_h4,
         )
 
+    from bot.services.user_store import UserStore
+    deps.user_store = UserStore()
+
+    if config.has_vless and deps.xray_mgr:
+        migrated = deps.user_store.migrate_from_xray(deps.xray_mgr)
+        if migrated:
+            logger.info("Migrated %d existing VLESS users", migrated)
+
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
 
