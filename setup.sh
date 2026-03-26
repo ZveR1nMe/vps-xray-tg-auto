@@ -168,7 +168,64 @@ log "Скачиваю geo-файлы..."
 wget -qO "$XRAY_DIR/geoip.dat" "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat"
 wget -qO "$XRAY_DIR/geosite.dat" "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat"
 
-# --- SNI Selection ---
+# --- DoH DNS Selection ---
+
+log "Выбор лучшего DoH DNS..."
+
+declare -A DOH_REMOTE=(
+    ["https://cloudflare-dns.com/dns-query"]="1.1.1.1"
+    ["https://dns.google/dns-query"]="8.8.8.8"
+    ["https://dns.quad9.net:443/dns-query"]="9.9.9.9"
+)
+declare -A DOH_DOMESTIC=(
+    ["https://common.dot.dns.yandex.net/dns-query"]="77.88.8.8"
+    ["https://dns.google/dns-query"]="8.8.8.8"
+)
+
+test_doh() {
+    local url="$1"
+    local total=0; local success=0
+    for i in 1 2 3; do
+        t=$(curl --connect-timeout 3 -s -o /dev/null -w "%{time_total}" "${url}?name=google.com&type=A" -H "accept: application/dns-json" 2>/dev/null || echo "999")
+        total=$(echo "$total + $t" | bc)
+        [[ "$t" != "999" ]] && ((success++)) || true
+    done
+    if [[ $success -gt 0 ]]; then
+        echo "scale=4; $total / 3" | bc
+    else
+        echo "999"
+    fi
+}
+
+BEST_REMOTE_DOH="https://dns.google/dns-query"
+BEST_REMOTE_DOH_IP="8.8.8.8"
+BEST_REMOTE_TIME=999
+for url in "${!DOH_REMOTE[@]}"; do
+    avg=$(test_doh "$url")
+    log "  Remote $url: ${avg}s"
+    if (( $(echo "$avg < $BEST_REMOTE_TIME" | bc -l) )); then
+        BEST_REMOTE_TIME="$avg"
+        BEST_REMOTE_DOH="$url"
+        BEST_REMOTE_DOH_IP="${DOH_REMOTE[$url]}"
+    fi
+done
+log "Лучший remote DoH: $BEST_REMOTE_DOH ($BEST_REMOTE_DOH_IP)"
+
+BEST_DOMESTIC_DOH="https://common.dot.dns.yandex.net/dns-query"
+BEST_DOMESTIC_DOH_IP="77.88.8.8"
+BEST_DOMESTIC_TIME=999
+for url in "${!DOH_DOMESTIC[@]}"; do
+    avg=$(test_doh "$url")
+    log "  Domestic $url: ${avg}s"
+    if (( $(echo "$avg < $BEST_DOMESTIC_TIME" | bc -l) )); then
+        BEST_DOMESTIC_TIME="$avg"
+        BEST_DOMESTIC_DOH="$url"
+        BEST_DOMESTIC_DOH_IP="${DOH_DOMESTIC[$url]}"
+    fi
+done
+log "Лучший domestic DoH: $BEST_DOMESTIC_DOH ($BEST_DOMESTIC_DOH_IP)"
+
+# --- SNI Selection (через лучший DoH) ---
 
 log "Выбор лучшего SNI..."
 SNI_CANDIDATES=("www.google.com" "www.microsoft.com" "www.yahoo.com" "www.apple.com")
@@ -178,7 +235,7 @@ BEST_TIME=999
 for sni in "${SNI_CANDIDATES[@]}"; do
     total=0; success=0
     for i in 1 2 3; do
-        t=$(curl --connect-timeout 3 -s -o /dev/null -w "%{time_connect}" "https://$sni" 2>/dev/null || echo "999")
+        t=$(curl --connect-timeout 3 --doh-url "$BEST_REMOTE_DOH" -s -o /dev/null -w "%{time_connect}" "https://$sni" 2>/dev/null || echo "999")
         total=$(echo "$total + $t" | bc)
         [[ "$t" != "999" ]] && ((success++)) || true
     done
@@ -335,6 +392,10 @@ SERVER_IP=$SERVER_IP
 PUBLIC_KEY=$PUBLIC_KEY
 SHORT_ID=$SHORT_ID
 BEST_SNI=$BEST_SNI
+REMOTE_DOH=$BEST_REMOTE_DOH
+REMOTE_DOH_IP=$BEST_REMOTE_DOH_IP
+DOMESTIC_DOH=$BEST_DOMESTIC_DOH
+DOMESTIC_DOH_IP=$BEST_DOMESTIC_DOH_IP
 SOCKS_PORT=$SOCKS_PORT
 SOCKS_USER=$SOCKS_USER
 SOCKS_PASS=$SOCKS_PASS

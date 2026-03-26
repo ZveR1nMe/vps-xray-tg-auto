@@ -37,10 +37,9 @@ def _get_tg_proxy() -> str:
     return deps.config.tg_proxy_link
 
 
-@functools.cache
 def _get_routing_link() -> str:
-    from bot.services.xray_manager import XrayManager
-    return XrayManager.get_happ_routing_link()
+    from bot import deps
+    return deps.xray_mgr.get_happ_routing_link()
 
 
 async def _send_user_card(

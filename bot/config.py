@@ -16,6 +16,10 @@ class Config:
     socks_port: int
     socks_user: str
     socks_pass: str
+    remote_doh: str = "https://dns.google/dns-query"
+    remote_doh_ip: str = "8.8.8.8"
+    domestic_doh: str = "https://common.dot.dns.yandex.net/dns-query"
+    domestic_doh_ip: str = "77.88.8.8"
     xray_config: str = "/opt/vps-setup/xray-config.json"
 
     @property
@@ -35,6 +39,10 @@ def load_config() -> Config:
             socks_port=int(os.environ["SOCKS_PORT"]),
             socks_user=os.environ["SOCKS_USER"],
             socks_pass=os.environ["SOCKS_PASS"],
+            remote_doh=os.environ.get("REMOTE_DOH", "https://dns.google/dns-query"),
+            remote_doh_ip=os.environ.get("REMOTE_DOH_IP", "8.8.8.8"),
+            domestic_doh=os.environ.get("DOMESTIC_DOH", "https://common.dot.dns.yandex.net/dns-query"),
+            domestic_doh_ip=os.environ.get("DOMESTIC_DOH_IP", "77.88.8.8"),
         )
     except KeyError as e:
         print(f"Missing env var: {e}", file=sys.stderr)

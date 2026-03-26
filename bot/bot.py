@@ -57,6 +57,10 @@ async def main() -> None:
         public_key=config.public_key,
         short_id=config.short_id,
         sni=config.sni,
+        remote_doh=config.remote_doh,
+        remote_doh_ip=config.remote_doh_ip,
+        domestic_doh=config.domestic_doh,
+        domestic_doh_ip=config.domestic_doh_ip,
     )
 
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode="HTML"))

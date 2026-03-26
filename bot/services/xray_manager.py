@@ -13,12 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 class XrayManager:
-    def __init__(self, config_path: str, server_ip: str, public_key: str, short_id: str, sni: str) -> None:
+    def __init__(self, config_path: str, server_ip: str, public_key: str, short_id: str, sni: str,
+                 remote_doh: str = "https://dns.google/dns-query", remote_doh_ip: str = "8.8.8.8",
+                 domestic_doh: str = "https://common.dot.dns.yandex.net/dns-query", domestic_doh_ip: str = "77.88.8.8") -> None:
         self._path = Path(config_path)
         self._server_ip = server_ip
         self._public_key = public_key
         self._short_id = short_id
         self._sni = sni
+        self._remote_doh = remote_doh
+        self._remote_doh_ip = remote_doh_ip
+        self._domestic_doh = domestic_doh
+        self._domestic_doh_ip = domestic_doh_ip
 
     def _read_config(self) -> dict:
         return json.loads(self._path.read_text())
@@ -101,25 +107,23 @@ class XrayManager:
         fragment = quote(name, safe="")
         return f"vless://{client_uuid}@{self._server_ip}:443?{params}#{fragment}"
 
-    @staticmethod
-    def get_happ_routing_link() -> str:
+    def get_happ_routing_link(self) -> str:
         """Генерирует happ://routing/add/ deep link с split-tunneling для РФ."""
         profile = {
             "Name": "VPS Split-Tunnel RU",
             "GlobalProxy": "true",
             "RemoteDNSType": "DoH",
-            "RemoteDNSDomain": "https://dns.google/dns-query",
-            "RemoteDNSIP": "8.8.8.8",
+            "RemoteDNSDomain": self._remote_doh,
+            "RemoteDNSIP": self._remote_doh_ip,
             "DomesticDNSType": "DoH",
-            "DomesticDNSDomain": "https://common.dot.dns.yandex.net/dns-query",
-            "DomesticDNSIP": "77.88.8.8",
-            "Geoipurl": "",
-            "Geositeurl": "",
+            "DomesticDNSDomain": self._domestic_doh,
+            "DomesticDNSIP": self._domestic_doh_ip,
+            "Geoipurl": "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat",
+            "Geositeurl": "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat",
             "LastUpdated": "",
             "DnsHosts": {},
             "DirectSites": [
                 "geosite:category-ru",
-                "geosite:geolocation-ru",
             ],
             "DirectIp": [
                 "geoip:ru",
