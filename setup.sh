@@ -41,6 +41,23 @@ if [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]]; then
     fi
 fi
 
+# --- Режим установки ---
+
+echo ""
+log "Выберите режим установки:"
+echo "  1) Только VLESS Reality"
+echo "  2) Только AmneziaWG 2.0"
+echo "  3) VLESS + AmneziaWG (оба)"
+echo ""
+read -rp "Режим [1/2/3]: " INSTALL_MODE_INPUT
+case "${INSTALL_MODE_INPUT:-3}" in
+    1) INSTALL_MODE="vless" ;;
+    2) INSTALL_MODE="awg" ;;
+    3) INSTALL_MODE="both" ;;
+    *) warn "Неверный выбор, ставлю оба"; INSTALL_MODE="both" ;;
+esac
+log "Режим: $INSTALL_MODE"
+
 # --- Минимальные зависимости для проверки ---
 
 log "Установка базовых пакетов..."
@@ -91,7 +108,9 @@ log "Настройка UFW..."
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow "$SSH_PORT"/tcp comment 'SSH'
-ufw allow 443/tcp comment 'VLESS Reality'
+if [[ "$INSTALL_MODE" == "vless" || "$INSTALL_MODE" == "both" ]]; then
+    ufw allow 443/tcp comment 'VLESS Reality'
+fi
 echo "y" | ufw enable
 
 # --- Fail2ban ---
@@ -154,7 +173,9 @@ net.ipv4.tcp_syncookies = 1
 SYSCTL
 sysctl --system > /dev/null
 
-# --- Установка xray ---
+# --- Установка xray (только для vless/both) ---
+
+if [[ "$INSTALL_MODE" == "vless" || "$INSTALL_MODE" == "both" ]]; then
 
 log "Установка xray..."
 mkdir -p "$XRAY_DIR"
@@ -368,6 +389,23 @@ if ! pgrep -f "xray" > /dev/null; then
     exit 1
 fi
 log "xray запущен на порту 443"
+
+fi  # end VLESS
+
+# --- Fallback-переменные если VLESS не установлен ---
+
+if [[ "$INSTALL_MODE" == "awg" ]]; then
+    PUBLIC_KEY=""
+    SHORT_ID=""
+    BEST_SNI=""
+    BEST_REMOTE_DOH=""
+    BEST_REMOTE_DOH_IP=""
+    BEST_DOMESTIC_DOH=""
+    BEST_DOMESTIC_DOH_IP=""
+    SOCKS_PORT=""
+    SOCKS_USER=""
+    SOCKS_PASS=""
+fi
 
 # --- Python Bot ---
 
