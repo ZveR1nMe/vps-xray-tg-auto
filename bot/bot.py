@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from bot.config import load_config
 from bot.services.xray_manager import XrayManager
 from bot.services.monitor import Monitor
+from bot.services.awg_manager import AwgManager
 
 _log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 _log_dir = Path("/opt/vps-setup/logs")
@@ -51,17 +52,36 @@ async def main() -> None:
 
     from bot import deps
     deps.config = config
-    deps.xray_mgr = XrayManager(
-        config_path=config.xray_config,
-        server_ip=config.server_ip,
-        public_key=config.public_key,
-        short_id=config.short_id,
-        sni=config.sni,
-        remote_doh=config.remote_doh,
-        remote_doh_ip=config.remote_doh_ip,
-        domestic_doh=config.domestic_doh,
-        domestic_doh_ip=config.domestic_doh_ip,
-    )
+
+    if config.has_vless:
+        deps.xray_mgr = XrayManager(
+            config_path=config.xray_config,
+            server_ip=config.server_ip,
+            public_key=config.public_key,
+            short_id=config.short_id,
+            sni=config.sni,
+            remote_doh=config.remote_doh,
+            remote_doh_ip=config.remote_doh_ip,
+            domestic_doh=config.domestic_doh,
+            domestic_doh_ip=config.domestic_doh_ip,
+        )
+
+    if config.has_awg:
+        deps.awg_mgr = AwgManager(
+            config_path=config.awg_config,
+            server_ip=config.server_ip,
+            server_pubkey=config.awg_server_pubkey,
+            awg_port=config.awg_port,
+            jc=config.awg_jc,
+            jmin=config.awg_jmin,
+            jmax=config.awg_jmax,
+            s1=config.awg_s1,
+            s2=config.awg_s2,
+            h1=config.awg_h1,
+            h2=config.awg_h2,
+            h3=config.awg_h3,
+            h4=config.awg_h4,
+        )
 
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
