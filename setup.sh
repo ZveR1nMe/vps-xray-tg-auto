@@ -41,6 +41,13 @@ if [[ -z "${BOT_TOKEN:-}" || -z "${CHAT_ID:-}" ]]; then
     fi
 fi
 
+# --- Минимальные зависимости для проверки ---
+
+log "Установка базовых пакетов..."
+export DEBIAN_FRONTEND=noninteractive
+apt update -qq
+apt install -y -qq jq bc > /dev/null
+
 # --- Проверка Telegram ---
 
 log "Проверка Telegram..."
@@ -55,9 +62,8 @@ log "Telegram OK"
 # --- Обновление системы ---
 
 log "Обновление системы..."
-export DEBIAN_FRONTEND=noninteractive
-apt update && apt upgrade -y
-apt install -y curl wget jq bc python3 python3-pip python3-venv ufw fail2ban unzip
+apt upgrade -y
+apt install -y curl wget python3 python3-pip python3-venv ufw fail2ban unzip
 
 # Автообновления безопасности
 apt install -y unattended-upgrades
