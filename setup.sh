@@ -493,12 +493,9 @@ if [[ "$(echo "$SETUP_ROUTER" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
         apt install -y sshpass
     fi
 
-    read -rp "IP роутера [192.168.1.1]: " ROUTER_IP
-    ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
-    read -rp "SSH порт Entware [222]: " ROUTER_PORT
-    ROUTER_PORT="${ROUTER_PORT:-222}"
-    read -rp "Пароль SSH [keenetic]: " ROUTER_PASS
-    ROUTER_PASS="${ROUTER_PASS:-keenetic}"
+    # Скрипт keenetic.sh сам запросит все данные для подключения
+    # (IP, пароль admin CLI, пароль Entware SSH)
+    # и определит доступные способы подключения
 
     # Генерация клиентского конфига для роутера
     ROUTER_AWG_IP="10.8.1.2"
@@ -555,7 +552,7 @@ RCONF
         done
     fi
 
-    export ROUTER_IP ROUTER_PORT ROUTER_PASS AWG_CLIENT_IP="$ROUTER_AWG_IP" AWG_CLIENT_CONF="$AWG_ROUTER_CONF"
+    export AWG_CLIENT_IP="$ROUTER_AWG_IP" AWG_CLIENT_CONF="$AWG_ROUTER_CONF"
     bash "$ROUTER_SCRIPT" || warn "Настройка роутера не завершена, но сервер работает"
 
     rm -f "$AWG_ROUTER_CONF"

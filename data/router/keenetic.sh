@@ -14,32 +14,152 @@ log()  { echo -e "${GREEN}[router]${NC} $1"; }
 warn() { echo -e "${YELLOW}[router]${NC} $1"; }
 err()  { echo -e "${RED}[router]${NC} $1" >&2; }
 
-# --- Параметры (передаются из setup.sh) ---
-ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
-ROUTER_PORT="${ROUTER_PORT:-222}"
-ROUTER_PASS="${ROUTER_PASS:-keenetic}"
-AWG_CLIENT_CONF="${AWG_CLIENT_CONF:-}"  # Путь к клиентскому конфигу
+# --- Параметры ---
+ROUTER_IP="${ROUTER_IP:-}"
+ROUTER_ADMIN_USER="${ROUTER_ADMIN_USER:-admin}"
+ROUTER_ADMIN_PASS="${ROUTER_ADMIN_PASS:-}"
+ROUTER_ENTWARE_PASS="${ROUTER_ENTWARE_PASS:-keenetic}"
+AWG_CLIENT_CONF="${AWG_CLIENT_CONF:-}"
 AWG_CLIENT_IP="${AWG_CLIENT_IP:-10.8.1.2}"
 
-# SSH без eval — безопасно от инъекций
-SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p "$ROUTER_PORT" "root@$ROUTER_IP")
+# Состояние подключения (определяется в check_connection)
+HAS_ENTWARE_SSH=false
+HAS_ADMIN_CLI=false
 
+# SSH для Entware (порт 222, root)
+ENTWARE_SSH_ARGS=()
 ssh_exec() {
-    sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "$1" 2>&1
+    sshpass -p "$ROUTER_ENTWARE_PASS" ssh "${ENTWARE_SSH_ARGS[@]}" "$1" 2>&1
 }
 
+# ndmc через Entware SSH (если доступен) или через telnet (если нет)
 ndmc_exec() {
-    sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "ndmc -c \"$1\"" 2>&1
+    if [[ "$HAS_ENTWARE_SSH" == true ]]; then
+        sshpass -p "$ROUTER_ENTWARE_PASS" ssh "${ENTWARE_SSH_ARGS[@]}" "ndmc -c \"$1\"" 2>&1
+    else
+        _ndmc_via_telnet "$1"
+    fi
+}
+
+# NDMS CLI через telnet (для роутеров без Entware)
+_ndmc_via_telnet() {
+    local cmd="$1"
+    {
+        sleep 1
+        echo "$ROUTER_ADMIN_USER"
+        sleep 1
+        echo "$ROUTER_ADMIN_PASS"
+        sleep 1
+        echo "$cmd"
+        sleep 2
+        echo "exit"
+    } | nc -w10 "$ROUTER_IP" 23 2>/dev/null | grep -v "^Login:\|^Password:\|^$" | sed 's/\[K//g; s/\r//g'
+}
+
+# --- Запрос данных подключения ---
+ask_credentials() {
+    echo ""
+    log "Подключение к роутеру Keenetic"
+    echo ""
+
+    if [[ -z "$ROUTER_IP" ]]; then
+        read -rp "  IP роутера [192.168.1.1]: " ROUTER_IP
+        ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
+    fi
+
+    # Проверить какие порты доступны
+    log "Сканирую порты роутера..."
+    local port_222_open=false
+    local port_23_open=false
+
+    if nc -z -w3 "$ROUTER_IP" 222 2>/dev/null; then
+        port_222_open=true
+        log "  Порт 222 (Entware SSH): открыт"
+    else
+        log "  Порт 222 (Entware SSH): закрыт"
+    fi
+
+    if nc -z -w3 "$ROUTER_IP" 23 2>/dev/null; then
+        port_23_open=true
+        log "  Порт 23 (Telnet CLI): открыт"
+    else
+        log "  Порт 23 (Telnet CLI): закрыт"
+    fi
+
+    if [[ "$port_222_open" == false && "$port_23_open" == false ]]; then
+        err "Роутер $ROUTER_IP недоступен (ни SSH:222, ни Telnet:23)"
+        err "Проверьте:"
+        err "  - IP роутера ($ROUTER_IP)"
+        err "  - Включён ли компонент SSH в настройках роутера"
+        err "  - Включён ли Telnet (Управление → Настройки системы)"
+        return 1
+    fi
+
+    # Запросить данные для Entware SSH (если порт открыт)
+    if [[ "$port_222_open" == true ]]; then
+        if [[ -z "$ROUTER_ENTWARE_PASS" ]]; then
+            read -rp "  Пароль Entware SSH (порт 222) [keenetic]: " ROUTER_ENTWARE_PASS
+            ROUTER_ENTWARE_PASS="${ROUTER_ENTWARE_PASS:-keenetic}"
+        fi
+    fi
+
+    # Запросить данные для Admin CLI (всегда нужен для ndmc, если Entware нет)
+    if [[ "$port_222_open" == false || -z "$ROUTER_ADMIN_PASS" ]]; then
+        echo ""
+        echo "  Данные администратора роутера (от веб-интерфейса):"
+        read -rp "  Логин [admin]: " ROUTER_ADMIN_USER
+        ROUTER_ADMIN_USER="${ROUTER_ADMIN_USER:-admin}"
+        read -rsp "  Пароль: " ROUTER_ADMIN_PASS
+        echo ""
+
+        if [[ -z "$ROUTER_ADMIN_PASS" ]]; then
+            err "Пароль администратора обязателен"
+            return 1
+        fi
+    fi
 }
 
 # --- Проверка подключения ---
 check_connection() {
-    log "Проверка подключения к роутеру $ROUTER_IP:$ROUTER_PORT..."
-    if ! ssh_exec "echo ok" | grep -q "ok"; then
-        err "Не удалось подключиться к роутеру"
-        err "Проверьте: IP ($ROUTER_IP), порт ($ROUTER_PORT), пароль, SSH включён"
+    ask_credentials || return 1
+
+    # Попробовать Entware SSH (порт 222)
+    if nc -z -w3 "$ROUTER_IP" 222 2>/dev/null; then
+        ENTWARE_SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p 222 "root@$ROUTER_IP")
+
+        if ssh_exec "echo ok" 2>/dev/null | grep -q "ok"; then
+            HAS_ENTWARE_SSH=true
+            log "Entware SSH (порт 222): подключено"
+        else
+            warn "Порт 222 открыт, но авторизация не прошла"
+        fi
+    fi
+
+    # Попробовать Admin CLI через telnet
+    if nc -z -w3 "$ROUTER_IP" 23 2>/dev/null && [[ -n "$ROUTER_ADMIN_PASS" ]]; then
+        local test_cli
+        test_cli=$(_ndmc_via_telnet "show version")
+        if echo "$test_cli" | grep -q "title:"; then
+            HAS_ADMIN_CLI=true
+            log "Admin CLI (Telnet 23): подключено"
+        else
+            warn "Telnet доступен, но авторизация не прошла. Проверьте логин/пароль администратора."
+        fi
+    fi
+
+    # Нужен хотя бы один способ подключения
+    if [[ "$HAS_ENTWARE_SSH" == false && "$HAS_ADMIN_CLI" == false ]]; then
+        err "Не удалось авторизоваться ни через SSH:222, ни через Telnet:23"
+        err "Проверьте пароли и попробуйте снова"
         return 1
     fi
+
+    # Если нет Entware SSH, нужно будет установить Entware
+    if [[ "$HAS_ENTWARE_SSH" == false ]]; then
+        warn "Entware не установлен — будет установлен автоматически"
+        warn "Для установки используется Admin CLI (Telnet)"
+    fi
+
     log "Подключение OK"
 }
 
@@ -47,14 +167,23 @@ check_connection() {
 detect_router() {
     log "Определение модели роутера..."
 
-    # Собираем всю информацию одним SSH-вызовом
     local info
-    info=$(ssh_exec "echo ARCH=\$(uname -m); echo SOC=\$(grep 'system type' /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2); echo RAM=\$(grep MemTotal /proc/meminfo | awk '{print \$2}'); echo INTFREE=\$(df /tmp 2>/dev/null | tail -1 | awk '{print \$4}'); ndmc -c 'show version' 2>/dev/null | grep -E 'device:|hw_id:|title:'")
+    if [[ "$HAS_ENTWARE_SSH" == true ]]; then
+        # Через Entware SSH — один вызов, полная информация
+        info=$(ssh_exec "echo ARCH=\$(uname -m); echo SOC=\$(grep 'system type' /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2); echo RAM=\$(grep MemTotal /proc/meminfo | awk '{print \$2}'); echo INTFREE=\$(df /tmp 2>/dev/null | tail -1 | awk '{print \$4}'); ndmc -c 'show version' 2>/dev/null | grep -E 'device:|hw_id:|title:|arch:'")
 
-    ROUTER_ARCH=$(echo "$info" | grep "^ARCH=" | cut -d= -f2 | tr -d '[:space:]')
-    ROUTER_SOC=$(echo "$info" | grep "^SOC=" | cut -d= -f2 | tr -d '[:space:]')
-    ROUTER_RAM_KB=$(echo "$info" | grep "^RAM=" | cut -d= -f2 | tr -d '[:space:]')
-    INTERNAL_FREE_KB=$(echo "$info" | grep "^INTFREE=" | cut -d= -f2 | tr -d '[:space:]')
+        ROUTER_ARCH=$(echo "$info" | grep "^ARCH=" | cut -d= -f2 | tr -d '[:space:]')
+        ROUTER_SOC=$(echo "$info" | grep "^SOC=" | cut -d= -f2 | tr -d '[:space:]')
+        ROUTER_RAM_KB=$(echo "$info" | grep "^RAM=" | cut -d= -f2 | tr -d '[:space:]')
+        INTERNAL_FREE_KB=$(echo "$info" | grep "^INTFREE=" | cut -d= -f2 | tr -d '[:space:]')
+    else
+        # Через Admin CLI (telnet) — только ndmc доступен
+        info=$(ndmc_exec "show version")
+        ROUTER_ARCH=$(echo "$info" | grep "arch:" | awk '{print $2}' | tr -d '[:space:]')
+        ROUTER_RAM_KB=0
+        INTERNAL_FREE_KB=0
+    fi
+
     ROUTER_MODEL=$(echo "$info" | grep "device:" | awk '{print $2}' | tr -d '[:space:]')
     ROUTER_HW_ID=$(echo "$info" | grep "hw_id:" | awk '{print $2}' | tr -d '[:space:]')
     ROUTER_FW=$(echo "$info" | grep "title:" | awk '{print $2}' | tr -d '[:space:]')
@@ -98,12 +227,12 @@ detect_router() {
 setup_storage() {
     log "Проверка хранилища для Entware..."
 
-    # Проверить, есть ли уже Entware
-    if ssh_exec "test -f /opt/bin/opkg && echo yes" | grep -q "yes"; then
+    # Если Entware SSH работает — Entware точно есть
+    if [[ "$HAS_ENTWARE_SSH" == true ]]; then
         local opt_disk
-        opt_disk=$(ssh_exec "df /opt 2>/dev/null | tail -1 | awk '{print \$1}'")
+        opt_disk=$(ssh_exec "df /opt 2>/dev/null | tail -1 | awk '{print \$1}'" || echo "unknown")
         local opt_free
-        opt_free=$(ssh_exec "df -h /opt 2>/dev/null | tail -1 | awk '{print \$4}'")
+        opt_free=$(ssh_exec "df -h /opt 2>/dev/null | tail -1 | awk '{print \$4}'" || echo "unknown")
         log "Entware уже установлен на $opt_disk (свободно: $opt_free)"
         return 0
     fi
@@ -204,6 +333,13 @@ _format_and_install_usb() {
         return 1
     fi
 
+    # Форматирование требует shell-доступ (Entware SSH)
+    if [[ "$HAS_ENTWARE_SSH" == false ]]; then
+        err "Форматирование USB невозможно без Entware SSH"
+        err "Отформатируйте USB-флешку в ext4 на компьютере вручную и запустите скрипт заново"
+        return 1
+    fi
+
     log "Форматирование $device в ext4..."
 
     # Отмонтировать если смонтировано
@@ -230,9 +366,23 @@ _format_and_install_usb() {
 _install_entware_usb() {
     log "Установка Entware на USB..."
 
-    # Найти точку монтирования USB
+    # Через Admin CLI (ndmc) — установить компонент OPKG
+    log "  Проверяю компонент OPKG в прошивке..."
+    ndmc_exec "components install opkg"
+    sleep 3
+
+    # Найти USB-накопитель через ndmc
+    local usb_info
+    usb_info=$(ndmc_exec "show usb")
+
+    # Подключить Entware к USB
     local usb_id
-    usb_id=$(ssh_exec "ls /tmp/mnt/ 2>/dev/null | head -1" | tr -d '[:space:]')
+    if [[ "$HAS_ENTWARE_SSH" == true ]]; then
+        usb_id=$(ssh_exec "ls /tmp/mnt/ 2>/dev/null | head -1" | tr -d '[:space:]')
+    else
+        # Без SSH — берём из ndmc show media
+        usb_id=$(ndmc_exec "show media" | grep "uuid:" | head -1 | awk '{print $2}' | tr -d '[:space:]')
+    fi
 
     if [[ -z "$usb_id" ]]; then
         err "USB не смонтирован. Попробуйте перезагрузить роутер с USB и запустить скрипт заново."
@@ -243,14 +393,36 @@ _install_entware_usb() {
     ndmc_exec "opkg disk ${usb_id}:"
     sleep 5
     ndmc_exec "opkg initrc /opt/etc/init.d/rc.unslung"
-    sleep 3
+    sleep 5
 
-    if ssh_exec "test -f /opt/bin/opkg && echo yes" | grep -q "yes"; then
-        log "Entware установлен на USB"
-    else
-        err "Не удалось установить Entware на USB"
+    # После установки Entware — должен появиться SSH на порту 222
+    log "  Ожидаю запуск Entware SSH (порт 222)..."
+    local retry=0
+    while [[ $retry -lt 10 ]]; do
+        if nc -z -w3 "$ROUTER_IP" 222 2>/dev/null; then
+            ENTWARE_SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p 222 "root@$ROUTER_IP")
+            if ssh_exec "echo ok" 2>/dev/null | grep -q "ok"; then
+                HAS_ENTWARE_SSH=true
+                log "Entware установлен на USB, SSH:222 доступен"
+                return 0
+            fi
+        fi
+        retry=$((retry + 1))
+        sleep 3
+    done
+
+    # SSH не появился — проверить через ndmc
+    local opkg_status
+    opkg_status=$(ndmc_exec "show opkg" || true)
+    if echo "$opkg_status" | grep -q "installed"; then
+        warn "Entware установлен, но SSH:222 не запустился"
+        warn "Пароль Entware SSH по умолчанию: keenetic"
+        warn "Попробуйте перезагрузить роутер и запустить скрипт заново"
         return 1
     fi
+
+    err "Не удалось установить Entware"
+    return 1
 }
 
 _install_entware_internal() {
