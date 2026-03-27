@@ -487,7 +487,7 @@ log "AmneziaWG запущен на порту $AWG_PORT (UDP)"
 
 echo ""
 read -rp "Настроить роутер Keenetic автоматически? (y/n): " SETUP_ROUTER
-if [[ "${SETUP_ROUTER,,}" == "y" ]]; then
+if [[ "$(echo "$SETUP_ROUTER" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
     # Проверка sshpass
     if ! command -v sshpass &>/dev/null; then
         apt install -y sshpass

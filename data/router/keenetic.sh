@@ -132,7 +132,7 @@ setup_storage() {
             STORAGE_CHOICE="2"
             echo ""
             read -rp "  Отформатировать USB в ext4? (y/n): " FORMAT_CONFIRM
-            if [[ "${FORMAT_CONFIRM,,}" != "y" ]]; then
+            if [[ "$(echo "$FORMAT_CONFIRM" | tr '[:upper:]' '[:lower:]')" != "y" ]]; then
                 STORAGE_CHOICE="3"
             fi
         fi
@@ -385,7 +385,7 @@ _check_awg_updates() {
             warn "Доступна новая версия AWG-Go: $latest_ver (установлена: $current_ver)"
             echo ""
             read -rp "  Обновить? (y/n): " UPDATE_AWG
-            if [[ "${UPDATE_AWG,,}" == "y" ]]; then
+            if [[ "$(echo "$UPDATE_AWG" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
                 _download_latest_awg
                 _install_awg_packages
             fi
@@ -479,7 +479,7 @@ cleanup_before() {
         fi
         echo ""
         read -rp "  Удалить Shadowsocks? (y/n): " DEL_SS
-        if [[ "${DEL_SS,,}" == "y" ]]; then
+        if [[ "$(echo "$DEL_SS" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
             ssh_exec "/opt/etc/init.d/S22shadowsocks stop 2>/dev/null" || true
             ssh_exec "rm -f /opt/etc/init.d/S22shadowsocks"
             ssh_exec "opkg remove shadowsocks-libev 2>/dev/null" || true
@@ -499,7 +499,7 @@ cleanup_before() {
             warn "  Запущено системных DNS процессов: $system_dns"
             echo ""
             read -rp "  Удалить dnscrypt-proxy (рекомендуется)? (y/n): " DEL_DNS
-            if [[ "${DEL_DNS,,}" == "y" ]]; then
+            if [[ "$(echo "$DEL_DNS" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
                 ssh_exec "/opt/etc/init.d/S09dnscrypt-proxy2 stop 2>/dev/null" || true
                 ssh_exec "rm -f /opt/etc/init.d/S09dnscrypt-proxy2"
                 ssh_exec "opkg remove dnscrypt-proxy2 2>/dev/null" || true
@@ -522,7 +522,7 @@ cleanup_before() {
             warn "Найден Entware dnsmasq, но системный dnsmasq уже запущен"
             echo ""
             read -rp "  Удалить Entware dnsmasq? (y/n): " DEL_DNSMASQ
-            if [[ "${DEL_DNSMASQ,,}" == "y" ]]; then
+            if [[ "$(echo "$DEL_DNSMASQ" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
                 ssh_exec "/opt/etc/init.d/S56dnsmasq stop 2>/dev/null" || true
                 ssh_exec "rm -f /opt/etc/init.d/S56dnsmasq"
                 ssh_exec "opkg remove dnsmasq-full 2>/dev/null; opkg remove dnsmasq 2>/dev/null" || true
@@ -537,7 +537,7 @@ cleanup_before() {
         warn "Найден MagiTrickle — заменён DNS-маршрутами KeenOS 5.0"
         echo ""
         read -rp "  Удалить MagiTrickle? (y/n): " DEL_MT
-        if [[ "${DEL_MT,,}" != "y" ]]; then
+        if [[ "$(echo "$DEL_MT" | tr '[:upper:]' '[:lower:]')" != "y" ]]; then
             log "MagiTrickle оставлен"
         else
         ssh_exec "/opt/etc/init.d/S99magitrickle stop 2>/dev/null" || true
