@@ -224,12 +224,14 @@ detect_router() {
             return 1
             ;;
     esac
-    # Определяем реальный endianness из Entware
-    local entware_arch
-    entware_arch=$(ssh_exec "grep 'arch mipsel' /opt/etc/opkg.conf 2>/dev/null || grep 'arch aarch64' /opt/etc/opkg.conf 2>/dev/null" | head -1 | awk '{print $2}' || true)
-    if [[ -n "$entware_arch" ]]; then
-        AWG_PKG_SUFFIX="$entware_arch"
-        log "  Entware архитектура: $entware_arch"
+    # Определяем реальный endianness из Entware (только если Entware SSH доступен)
+    if [[ "$HAS_ENTWARE_SSH" == true ]]; then
+        local entware_arch
+        entware_arch=$(ssh_exec "grep 'arch mipsel' /opt/etc/opkg.conf 2>/dev/null || grep 'arch aarch64' /opt/etc/opkg.conf 2>/dev/null" | head -1 | awk '{print $2}' || true)
+        if [[ -n "$entware_arch" ]]; then
+            AWG_PKG_SUFFIX="$entware_arch"
+            log "  Entware архитектура: $entware_arch"
+        fi
     fi
     log "  Пакеты: $AWG_PKG_SUFFIX"
 
@@ -1146,7 +1148,7 @@ download_dns_lists() {
     local repo_url="https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main"
     log "Скачиваю списки доменов..."
     mkdir -p "$DNS_LISTS_DIR"
-    for svc in youtube instagram facebook telegram whatsapp twitter discord reddit spotify; do
+    for svc in youtube instagram facebook telegram whatsapp viber anthropic; do
         curl -sL "${repo_url}/data/router/dns-lists/${svc}.lst" -o "$DNS_LISTS_DIR/${svc}.lst" 2>/dev/null
     done
     log "Списки загружены"

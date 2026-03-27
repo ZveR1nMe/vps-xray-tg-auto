@@ -418,6 +418,10 @@ AWG_SERVER_PUBKEY=$(echo "$AWG_SERVER_PRIVKEY" | awg pubkey)
 
 # Рандомный UDP порт
 AWG_PORT=$(shuf -i 10000-60000 -n 1)
+# Проверка коллизии портов
+while [[ "$AWG_PORT" == "${SOCKS_PORT:-}" ]]; do
+    AWG_PORT=$(shuf -i 10000-60000 -n 1)
+done
 log "AWG порт: $AWG_PORT"
 
 # Параметры обфускации
@@ -500,7 +504,6 @@ fi  # end AWG
 log "Установка бота..."
 
 # Скачиваем бот из репозитория (или копируем если запущен локально)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -d "$SCRIPT_DIR/bot" ]]; then
     cp -r "$SCRIPT_DIR/bot" "$INSTALL_DIR/"
 else

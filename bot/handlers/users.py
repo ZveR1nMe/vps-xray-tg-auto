@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import qrcode
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -103,8 +104,8 @@ async def cb_users_add(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(AddUser.waiting_name)
 async def on_user_name(message: Message, state: FSMContext) -> None:
     name = message.text.strip()
-    if not name:
-        await message.answer("Имя не может быть пустым:")
+    if not name or len(name) > 32 or ":" in name:
+        await message.answer("Имя: 1-32 символа, без двоеточий (:)")
         return
 
     store = _deps().user_store
@@ -404,19 +405,21 @@ async def _send_awg_card(send_photo, send_text, name: str, key_type: str, config
         [InlineKeyboardButton(text="🔙 К пользователю", callback_data=f"user:{name}")],
     ])
 
-    # Send config as file
+    # Send config as text preview
     await send_text(
         f"👤 <b>{name}</b> — {label}\n\n"
         f"<pre>{config_text}</pre>",
         parse_mode="HTML",
     )
 
+    # Send config as downloadable file
     config_file = BufferedInputFile(
         config_text.encode(),
         filename=f"awg_{name}_{key_type}.conf",
     )
-    await send_text(
-        "📎 Конфиг-файл:",
+    await send_text.__self__.answer_document(
+        config_file,
+        caption=f"📎 Конфиг {label}",
         reply_markup=kb,
     )
 
@@ -426,7 +429,6 @@ async def _send_awg_card(send_photo, send_text, name: str, key_type: str, config
         await send_photo(
             BufferedInputFile(qr_data, filename=f"qr_{name}_{key_type}.png"),
             caption=f"📱 QR для {label}",
-            reply_markup=kb,
         )
-    except Exception:
-        pass  # Config too long for QR, skip
+    except Exception as e:
+        logging.getLogger(__name__).debug("QR failed: %s", e)

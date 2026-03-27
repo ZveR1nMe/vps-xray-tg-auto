@@ -18,12 +18,28 @@ async def cb_status(callback: CallbackQuery) -> None:
     minutes = rem // 60
     load = psutil.getloadavg()
 
-    # xray running?
-    proc = await asyncio.create_subprocess_exec(
-        "pgrep", "-f", "xray", stdout=asyncio.subprocess.PIPE,
-    )
-    await proc.communicate()
-    xray_ok = proc.returncode == 0
+    from bot import deps
+    config = deps.config
+
+    services_lines = []
+
+    if getattr(config, "has_vless", False):
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep", "-f", "xray", stdout=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        xray_ok = proc.returncode == 0
+        services_lines.append(f"Xray: {'✅' if xray_ok else '❌'}")
+
+    if getattr(config, "has_awg", False):
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep", "-f", "awg-go", stdout=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        awg_ok = proc.returncode == 0
+        services_lines.append(f"AWG: {'✅' if awg_ok else '❌'}")
+
+    services_text = "\n".join(services_lines) if services_lines else "Сервисы: нет данных"
 
     text = (
         f"📊 <b>Статус сервера</b>\n\n"
@@ -33,7 +49,7 @@ async def cb_status(callback: CallbackQuery) -> None:
         f"Swap: {swap.used / (1024**3):.1f}/{swap.total / (1024**3):.1f} GB\n"
         f"Load: {load[0]:.2f}, {load[1]:.2f}, {load[2]:.2f}\n"
         f"Uptime: {days}d {hours}h {minutes}m\n\n"
-        f"Xray: {'✅' if xray_ok else '❌'}"
+        f"{services_text}"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[

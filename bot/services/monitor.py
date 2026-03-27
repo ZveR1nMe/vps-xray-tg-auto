@@ -56,8 +56,17 @@ class Monitor:
         if disk > 85:
             alerts.append(f"🔴 Диск {disk}%")
 
-        xray_ok = await _is_process_running("xray")
-        if not xray_ok:
-            alerts.append("🔴 xray не запущен!")
+        from bot import deps as _deps_module
+        config = _deps_module.config
+
+        if getattr(config, "has_vless", False):
+            xray_ok = await _is_process_running("xray")
+            if not xray_ok:
+                alerts.append("🔴 xray не запущен!")
+
+        if getattr(config, "has_awg", False):
+            awg_ok = await _is_process_running("awg-go")
+            if not awg_ok:
+                alerts.append("🔴 amneziawg не запущен!")
 
         return alerts

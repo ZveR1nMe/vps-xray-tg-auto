@@ -68,7 +68,8 @@ class UserStore:
         return user.get(key_type)
 
     def user_key_types(self, name: str) -> list[str]:
-        return list(self._data.get(name, {}).keys())
+        valid_types = ("vless", "awg", "awg_router")
+        return [k for k in self._data.get(name, {}).keys() if k in valid_types]
 
     def next_awg_ip(self) -> str:
         used = set()
