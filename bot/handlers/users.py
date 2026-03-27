@@ -242,7 +242,7 @@ async def cb_add_key(callback: CallbackQuery) -> None:
                 peer_data["private_key"], peer_data["psk"], client_ip, for_router=for_router,
             )
             await callback.message.delete()
-            await _send_awg_card(callback.message.answer_photo, callback.message.answer, name, key_type, config_text)
+            await _send_awg_card(callback.message, name, key_type, config_text)
 
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка: {e}")
@@ -273,7 +273,7 @@ async def cb_show_key(callback: CallbackQuery) -> None:
             config_text = deps.awg_mgr.make_client_config(
                 key_data["private_key"], key_data["psk"], key_data["ip"], for_router=for_router,
             )
-            await _send_awg_card(callback.message.answer_photo, callback.message.answer, name, key_type, config_text)
+            await _send_awg_card(callback.message, name, key_type, config_text)
         else:
             await callback.message.answer(f"❌ Ключ не найден")
 
@@ -398,7 +398,7 @@ async def _send_vless_card(send_photo, send_text, name: str, link: str) -> None:
     )
 
 
-async def _send_awg_card(send_photo, send_text, name: str, key_type: str, config_text: str) -> None:
+async def _send_awg_card(message: Message, name: str, key_type: str, config_text: str) -> None:
     label = KEY_LABELS.get(key_type, key_type)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -406,7 +406,7 @@ async def _send_awg_card(send_photo, send_text, name: str, key_type: str, config
     ])
 
     # Send config as text preview
-    await send_text(
+    await message.answer(
         f"👤 <b>{name}</b> — {label}\n\n"
         f"<pre>{config_text}</pre>",
         parse_mode="HTML",
@@ -417,7 +417,7 @@ async def _send_awg_card(send_photo, send_text, name: str, key_type: str, config
         config_text.encode(),
         filename=f"awg_{name}_{key_type}.conf",
     )
-    await send_text.__self__.answer_document(
+    await message.answer_document(
         config_file,
         caption=f"📎 Конфиг {label}",
         reply_markup=kb,
@@ -426,9 +426,9 @@ async def _send_awg_card(send_photo, send_text, name: str, key_type: str, config
     # Try QR (may be too long for router configs)
     try:
         qr_data = _make_qr(config_text)
-        await send_photo(
+        await message.answer_photo(
             BufferedInputFile(qr_data, filename=f"qr_{name}_{key_type}.png"),
             caption=f"📱 QR для {label}",
         )
     except Exception as e:
-        logging.getLogger(__name__).debug("QR failed: %s", e)
+        logging.getLogger(__name__).warning("QR failed: %s", e)

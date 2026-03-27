@@ -563,10 +563,18 @@ chmod 600 "$INSTALL_DIR/.env"
 
 # --- systemd для бота ---
 
+if [[ "$INSTALL_MODE" == "both" ]]; then
+    BOT_AFTER="network.target xray.service"
+elif [[ "$INSTALL_MODE" == "awg" ]]; then
+    BOT_AFTER="network.target awg-quick@awg0.service"
+else
+    BOT_AFTER="network.target xray.service"
+fi
+
 cat > /etc/systemd/system/vps-bot.service << SVC
 [Unit]
 Description=VPS Telegram Bot
-After=network.target xray.service
+After=$BOT_AFTER
 
 [Service]
 Type=simple

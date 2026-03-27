@@ -673,6 +673,10 @@ setup_awg_config() {
 
 # --- Очистка ДО установки (убрать конфликты) ---
 cleanup_before() {
+    if [[ "$HAS_ENTWARE_SSH" == false ]]; then
+        log "Пропуск очистки (нет SSH доступа к Entware)"
+        return 0
+    fi
     log "Проверка конфликтующих сервисов..."
     local cleaned=0
 
@@ -771,13 +775,14 @@ cleanup_before() {
     dup_count=$(ssh_exec "grep -c 'src/gz entware' /opt/etc/opkg.conf 2>/dev/null" || echo "0")
     if [[ "$dup_count" -gt 1 ]]; then
         warn "Дубликаты в opkg.conf ($dup_count записей entware) — исправляю"
-        # Определить правильный URL для архитектуры
+        # Определить правильный URL для архитектуры на основе AWG_PKG_SUFFIX
         local entware_url
-        case "${ROUTER_ARCH:-mips}" in
-            aarch64) entware_url="http://bin.entware.net/aarch64-k3.10" ;;
-            *)       entware_url="http://bin.entware.net/mipselsf-k3.4" ;;
-        esac
         local arch_name="${AWG_PKG_SUFFIX:-mipsel-3.4}"
+        case "$arch_name" in
+            aarch64-3.10) entware_url="http://bin.entware.net/aarch64-k3.10" ;;
+            mips-3.4)     entware_url="http://bin.entware.net/mipssf-k3.4" ;;
+            *)             entware_url="http://bin.entware.net/mipselsf-k3.4" ;;
+        esac
         ssh_exec "cat > /opt/etc/opkg.conf << OPKG
 src/gz entware ${entware_url}
 src/gz keendev ${entware_url}/keenetic
