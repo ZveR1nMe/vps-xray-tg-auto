@@ -243,7 +243,12 @@ _install_entware_internal() {
 install_awg_go() {
     log "Проверка AWG-Go..."
     if ssh_exec "opkg list-installed 2>/dev/null | grep amneziawg-go" | grep -q "amneziawg-go"; then
-        log "AWG-Go уже установлен"
+        local installed_ver
+        installed_ver=$(ssh_exec "opkg list-installed 2>/dev/null | grep amneziawg-go" | awk '{print $3}')
+        log "AWG-Go уже установлен (версия: $installed_ver)"
+
+        # Проверить наличие обновлений
+        _check_awg_updates "$installed_ver"
         return 0
     fi
 
@@ -253,13 +258,78 @@ install_awg_go() {
         return 1
     fi
 
-    local gitlab_base="https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main/blob/01__Entware_AWG-Go_Install"
+    _download_latest_awg
+    _install_awg_packages
+}
 
-    log "Скачиваю пакеты для $AWG_PKG_SUFFIX..."
+_get_awg_arch_folder() {
+    # Определяет папку в GitLab по архитектуре
+    case "$ROUTER_ARCH" in
+        mips)    echo "mips_awg-go" ;;
+        mipsel)  echo "mipsel_awg-go" ;;
+        aarch64) echo "aarch64_awg-go" ;;
+        *)       echo "mipsel_awg-go" ;;  # fallback
+    esac
+}
+
+_download_latest_awg() {
+    local arch_folder
+    arch_folder=$(_get_awg_arch_folder)
+
+    local gitlab_api="https://gitlab.com/api/v4/projects/ShidlaSGC%2Fkeenetic-entware-awg-go/repository/tree"
+    local gitlab_raw="https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main"
+
+    log "Поиск последних версий AWG-Go для $ROUTER_ARCH..."
+
+    # Получить список файлов из GitLab API
+    local file_list
+    file_list=$(curl -s "${gitlab_api}?path=blob/01__Entware_AWG-Go_Install/${arch_folder}&per_page=50" 2>/dev/null)
+
+    if [[ -z "$file_list" || "$file_list" == "[]" ]]; then
+        warn "Не удалось получить список из GitLab API, использую прямые ссылки"
+        _download_awg_fallback
+        return
+    fi
+
+    # Извлечь имена файлов .ipk
+    local tools_file
+    tools_file=$(echo "$file_list" | grep -o '"name":"amneziawg-tools[^"]*\.ipk"' | head -1 | cut -d'"' -f4)
+    local go_file
+    go_file=$(echo "$file_list" | grep -o '"name":"amneziawg-go[^"]*\.ipk"' | head -1 | cut -d'"' -f4)
+
+    if [[ -z "$tools_file" || -z "$go_file" ]]; then
+        warn "Не удалось определить файлы пакетов, использую fallback"
+        _download_awg_fallback
+        return
+    fi
+
+    log "  amneziawg-tools: $tools_file"
+    log "  amneziawg-go: $go_file"
+
+    local download_path="blob/01__Entware_AWG-Go_Install/${arch_folder}"
+
     ssh_exec "mkdir -p /opt/root/awg2-go && cd /opt/root/awg2-go && \
-        curl -sLOf '${gitlab_base}/amneziawg-tools_1.0.20250903-2_${AWG_PKG_SUFFIX}.ipk' && \
-        curl -sLOf '${gitlab_base}/amneziawg-go_v0.2.16-1_${AWG_PKG_SUFFIX}.ipk'"
+        rm -f *.ipk && \
+        curl -sLOf '${gitlab_raw}/${download_path}/${tools_file}' && \
+        curl -sLOf '${gitlab_raw}/${download_path}/${go_file}'"
 
+    log "Пакеты скачаны (последние версии)"
+}
+
+_download_awg_fallback() {
+    # Fallback — попробовать скачать с захардкоженными именами
+    local gitlab_raw="https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main/blob/01__Entware_AWG-Go_Install"
+    local arch_folder
+    arch_folder=$(_get_awg_arch_folder)
+
+    warn "Пробую скачать с fallback URL..."
+    ssh_exec "mkdir -p /opt/root/awg2-go && cd /opt/root/awg2-go && \
+        rm -f *.ipk && \
+        curl -sLOf '${gitlab_raw}/${arch_folder}/amneziawg-tools_1.0.20250903-2_${AWG_PKG_SUFFIX}.ipk' && \
+        curl -sLOf '${gitlab_raw}/${arch_folder}/amneziawg-go_v0.2.16-1_${AWG_PKG_SUFFIX}.ipk'"
+}
+
+_install_awg_packages() {
     log "Устанавливаю AWG-Go..."
     ssh_exec "opkg update 2>/dev/null; \
         opkg install /opt/root/awg2-go/amneziawg-tools*.ipk 2>&1; \
@@ -270,6 +340,41 @@ install_awg_go() {
     else
         err "Не удалось установить AWG-Go"
         return 1
+    fi
+}
+
+_check_awg_updates() {
+    local current_ver="${1:-}"
+    local arch_folder
+    arch_folder=$(_get_awg_arch_folder)
+
+    local gitlab_api="https://gitlab.com/api/v4/projects/ShidlaSGC%2Fkeenetic-entware-awg-go/repository/tree"
+    local file_list
+    file_list=$(curl -s "${gitlab_api}?path=blob/01__Entware_AWG-Go_Install/${arch_folder}&per_page=50" 2>/dev/null)
+
+    if [[ -z "$file_list" || "$file_list" == "[]" ]]; then
+        return 0
+    fi
+
+    local latest_go
+    latest_go=$(echo "$file_list" | grep -o '"name":"amneziawg-go[^"]*\.ipk"' | head -1 | cut -d'"' -f4)
+
+    if [[ -n "$latest_go" ]]; then
+        # Извлечь версию из имени файла (amneziawg-go_v0.2.16-1_xxx.ipk → v0.2.16-1)
+        local latest_ver
+        latest_ver=$(echo "$latest_go" | sed 's/amneziawg-go_\([^_]*\)_.*/\1/')
+
+        if [[ "$latest_ver" != "$current_ver" && "$latest_ver" != "v$current_ver" ]]; then
+            warn "Доступна новая версия AWG-Go: $latest_ver (установлена: $current_ver)"
+            echo ""
+            read -rp "  Обновить? (y/n): " UPDATE_AWG
+            if [[ "${UPDATE_AWG,,}" == "y" ]]; then
+                _download_latest_awg
+                _install_awg_packages
+            fi
+        else
+            log "AWG-Go актуальная версия"
+        fi
     fi
 }
 
