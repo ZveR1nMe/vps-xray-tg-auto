@@ -2,7 +2,9 @@
 # Автонастройка роутера Keenetic для AmneziaWG
 # Вызывается из setup.sh после установки AWG на сервере
 
-set -euo pipefail
+set -uo pipefail
+# НЕ используем set -e — SSH-команды могут возвращать ненулевой код,
+# это не должно убивать весь скрипт
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DNS_LISTS_DIR="$SCRIPT_DIR/dns-lists"
@@ -19,14 +21,15 @@ ROUTER_PASS="${ROUTER_PASS:-keenetic}"
 AWG_CLIENT_CONF="${AWG_CLIENT_CONF:-}"  # Путь к клиентскому конфигу
 AWG_CLIENT_IP="${AWG_CLIENT_IP:-10.8.1.2}"
 
-SSH_CMD="sshpass -p '$ROUTER_PASS' ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -p $ROUTER_PORT root@$ROUTER_IP"
+# SSH без eval — безопасно от инъекций
+SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p "$ROUTER_PORT" "root@$ROUTER_IP")
 
 ssh_exec() {
-    eval "$SSH_CMD '$1'" 2>&1
+    sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "$1" 2>&1
 }
 
 ndmc_exec() {
-    ssh_exec "ndmc -c \"$1\"" 2>&1
+    sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "ndmc -c \"$1\"" 2>&1
 }
 
 # --- Проверка подключения ---
@@ -44,13 +47,22 @@ check_connection() {
 detect_router() {
     log "Определение модели роутера..."
 
-    ROUTER_MODEL=$(ndmc_exec "show version" | grep "device:" | awk '{print $2}' | tr -d '[:space:]')
-    ROUTER_HW_ID=$(ndmc_exec "show version" | grep "hw_id:" | awk '{print $2}' | tr -d '[:space:]')
-    ROUTER_FW=$(ndmc_exec "show version" | grep "title:" | awk '{print $2}' | tr -d '[:space:]')
-    ROUTER_ARCH=$(ssh_exec "uname -m" | tr -d '[:space:]')
-    ROUTER_SOC=$(ssh_exec "cat /proc/cpuinfo 2>/dev/null | grep 'system type' | head -1 | cut -d: -f2" | tr -d '[:space:]')
-    ROUTER_RAM_KB=$(ssh_exec "grep MemTotal /proc/meminfo | awk '{print \$2}'" | tr -d '[:space:]')
-    ROUTER_RAM_MB=$((ROUTER_RAM_KB / 1024))
+    # Собираем всю информацию одним SSH-вызовом
+    local info
+    info=$(ssh_exec "echo ARCH=\$(uname -m); echo SOC=\$(grep 'system type' /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2); echo RAM=\$(grep MemTotal /proc/meminfo | awk '{print \$2}'); echo INTFREE=\$(df /tmp 2>/dev/null | tail -1 | awk '{print \$4}'); ndmc -c 'show version' 2>/dev/null | grep -E 'device:|hw_id:|title:'")
+
+    ROUTER_ARCH=$(echo "$info" | grep "^ARCH=" | cut -d= -f2 | tr -d '[:space:]')
+    ROUTER_SOC=$(echo "$info" | grep "^SOC=" | cut -d= -f2 | tr -d '[:space:]')
+    ROUTER_RAM_KB=$(echo "$info" | grep "^RAM=" | cut -d= -f2 | tr -d '[:space:]')
+    INTERNAL_FREE_KB=$(echo "$info" | grep "^INTFREE=" | cut -d= -f2 | tr -d '[:space:]')
+    ROUTER_MODEL=$(echo "$info" | grep "device:" | awk '{print $2}' | tr -d '[:space:]')
+    ROUTER_HW_ID=$(echo "$info" | grep "hw_id:" | awk '{print $2}' | tr -d '[:space:]')
+    ROUTER_FW=$(echo "$info" | grep "title:" | awk '{print $2}' | tr -d '[:space:]')
+
+    # Безопасные значения по умолчанию
+    ROUTER_RAM_KB="${ROUTER_RAM_KB:-0}"
+    INTERNAL_FREE_KB="${INTERNAL_FREE_KB:-0}"
+    local ROUTER_RAM_MB=$((ROUTER_RAM_KB / 1024))
 
     log "  Модель: $ROUTER_MODEL ($ROUTER_HW_ID)"
     log "  Прошивка: KeeneticOS $ROUTER_FW"
@@ -69,9 +81,7 @@ detect_router() {
     esac
     log "  Пакеты: $AWG_PKG_SUFFIX"
 
-    # Проверка внутренней памяти
-    INTERNAL_FREE_KB=$(ssh_exec "df /tmp 2>/dev/null | tail -1 | awk '{print \$4}'" | tr -d '[:space:]')
-    INTERNAL_FREE_MB=$((INTERNAL_FREE_KB / 1024))
+    local INTERNAL_FREE_MB=$((INTERNAL_FREE_KB / 1024))
     log "  Внутренняя память (tmpfs): ${INTERNAL_FREE_MB} MB свободно"
 }
 
@@ -155,6 +165,33 @@ _format_and_install_usb() {
 
     if [[ -z "$device" ]]; then
         err "USB-устройство не найдено"
+        return 1
+    fi
+
+    # Показать информацию об устройстве для подтверждения
+    local dev_size
+    dev_size=$(ssh_exec "cat /sys/block/$(basename $device)/size 2>/dev/null" | tr -d '[:space:]')
+    local dev_size_mb=""
+    if [[ -n "$dev_size" && "$dev_size" =~ ^[0-9]+$ ]]; then
+        dev_size_mb=$(( dev_size * 512 / 1024 / 1024 ))
+        log "  Устройство: $device (${dev_size_mb}MB)"
+    else
+        log "  Устройство: $device"
+    fi
+
+    # Проверить что это не системное устройство
+    local dev_basename
+    dev_basename=$(basename "$device")
+    if [[ "$dev_basename" == "mtdblock"* || "$dev_basename" == "ubi"* ]]; then
+        err "ОШИБКА: $device — системное устройство! Форматирование запрещено."
+        return 1
+    fi
+
+    echo ""
+    warn "  ВСЕ ДАННЫЕ НА $device БУДУТ УДАЛЕНЫ!"
+    read -rp "  Введите YES для подтверждения: " FORMAT_CONFIRM
+    if [[ "$FORMAT_CONFIRM" != "YES" ]]; then
+        log "Форматирование отменено"
         return 1
     fi
 
@@ -393,8 +430,8 @@ setup_awg_config() {
     # Создать директорию и загрузить конфиг
     ssh_exec "mkdir -p /opt/etc/amnezia/amneziawg"
 
-    # Передать конфиг через stdin
-    cat "$AWG_CLIENT_CONF" | eval "$SSH_CMD 'cat > /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf'"
+    # Передать конфиг через scp
+    sshpass -p "$ROUTER_PASS" scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -P "$ROUTER_PORT" "$AWG_CLIENT_CONF" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
     ssh_exec "chmod 600 /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
 
     # Скачать init.d скрипт
@@ -498,6 +535,11 @@ cleanup_before() {
     # 5. MagiTrickle — заменён DNS-маршрутами Keenetic
     if ssh_exec "test -f /opt/bin/magitrickled && echo yes" | grep -q "yes"; then
         warn "Найден MagiTrickle — заменён DNS-маршрутами KeenOS 5.0"
+        echo ""
+        read -rp "  Удалить MagiTrickle? (y/n): " DEL_MT
+        if [[ "${DEL_MT,,}" != "y" ]]; then
+            log "MagiTrickle оставлен"
+        else
         ssh_exec "/opt/etc/init.d/S99magitrickle stop 2>/dev/null" || true
         ssh_exec "rm -f /opt/etc/init.d/S99magitrickle /opt/bin/magitrickled"
         ssh_exec "rm -rf /opt/etc/magitrickle /opt/usr/share/magitrickle /opt/var/lib/magitrickle"
@@ -505,6 +547,7 @@ cleanup_before() {
         ssh_exec "rm -f /opt/lib/opkg/lists/magitrickle_*"
         log "MagiTrickle удалён"
         cleaned=$((cleaned + 1))
+        fi
     fi
 
     # 6. opkg.conf дубликаты
@@ -512,16 +555,23 @@ cleanup_before() {
     dup_count=$(ssh_exec "grep -c 'src/gz entware' /opt/etc/opkg.conf 2>/dev/null" || echo "0")
     if [[ "$dup_count" -gt 1 ]]; then
         warn "Дубликаты в opkg.conf ($dup_count записей entware) — исправляю"
-        ssh_exec "cat > /opt/etc/opkg.conf << 'OPKG'
-src/gz entware http://bin.entware.net/mipselsf-k3.4
-src/gz keendev http://bin.entware.net/mipselsf-k3.4/keenetic
+        # Определить правильный URL для архитектуры
+        local entware_url
+        case "${ROUTER_ARCH:-mips}" in
+            aarch64) entware_url="http://bin.entware.net/aarch64-k3.10" ;;
+            *)       entware_url="http://bin.entware.net/mipselsf-k3.4" ;;
+        esac
+        local arch_name="${AWG_PKG_SUFFIX:-mipsel-3.4}"
+        ssh_exec "cat > /opt/etc/opkg.conf << OPKG
+src/gz entware ${entware_url}
+src/gz keendev ${entware_url}/keenetic
 dest root /
 lists_dir ext /opt/var/opkg-lists
 arch all 100
-arch mipsel-3.4 150
-arch mipsel-3.4_kn 200
+arch ${arch_name} 150
+arch ${arch_name}_kn 200
 OPKG"
-        log "opkg.conf исправлен"
+        log "opkg.conf исправлен (архитектура: $arch_name)"
         cleaned=$((cleaned + 1))
     fi
 
@@ -718,16 +768,18 @@ setup_dns() {
 
     log "Настраиваю DNS: $chosen_name (DoT: $chosen_sni)"
 
-    # Удалить старые DNS upstream
-    local old_dns
-    old_dns=$(ndmc_exec "show running-config" | grep -E "tls upstream|https upstream" | grep "dns-proxy" || true)
+    # БЕЗОПАСНАЯ смена DNS:
+    # 1. Сначала добавляем plain DNS fallback (чтобы интернет не пропал)
+    # 2. Добавляем новый DoT/DoH
+    # 3. Удаляем старый DoT/DoH
+    # 4. Удаляем plain fallback
+    # Если скрипт упадёт на любом шаге — интернет сохранится
 
-    # Настроить DoT через ndmc
-    # Сначала удалим старые
-    ndmc_exec "no dns-proxy tls upstream" 2>/dev/null || true
-    ndmc_exec "no dns-proxy https upstream" 2>/dev/null || true
+    log "  Добавляю временный DNS fallback..."
+    ndmc_exec "dns-proxy upstream 8.8.8.8" 2>/dev/null || true
+    ndmc_exec "dns-proxy upstream 1.1.1.1" 2>/dev/null || true
 
-    # Добавить выбранный DoT (основной + резервный)
+    # Добавить новый DoT (основной + резервный)
     case "$chosen_name" in
         "AdGuard")
             ndmc_exec "dns-proxy tls upstream 94.140.14.14 sni dns.adguard-dns.com"
@@ -759,17 +811,40 @@ setup_dns() {
             ;;
     esac
 
-    # Добавить DoH как fallback
+    # Добавить DoH
     local doh_url="${DOH_SERVERS[$chosen_name]:-}"
     if [[ -n "$doh_url" ]]; then
         ndmc_exec "dns-proxy https upstream $doh_url dnsm"
     fi
 
+    # Теперь безопасно удалить старые DNS (новые уже работают)
+    log "  Удаляю старые DNS upstream..."
+    # Получить список старых tls/https upstream и удалить те, что не относятся к выбранному
+    local old_tls
+    old_tls=$(ndmc_exec "show running-config" | grep "tls upstream" | grep -v "$chosen_sni" || true)
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        line=$(echo "$line" | sed 's/^[[:space:]]*//')
+        ndmc_exec "no dns-proxy $line" 2>/dev/null || true
+    done <<< "$old_tls"
+
+    local old_https
+    old_https=$(ndmc_exec "show running-config" | grep "https upstream" | grep -v "${doh_url:-NONE}" || true)
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        line=$(echo "$line" | sed 's/^[[:space:]]*//')
+        ndmc_exec "no dns-proxy $line" 2>/dev/null || true
+    done <<< "$old_https"
+
+    # Удалить временный plain DNS fallback
+    ndmc_exec "no dns-proxy upstream 8.8.8.8" 2>/dev/null || true
+    ndmc_exec "no dns-proxy upstream 1.1.1.1" 2>/dev/null || true
+
     # Игнорировать DNS провайдера (важно для обхода блокировок)
     ndmc_exec "dns-proxy no rebind-protect"
     ndmc_exec "system configuration save"
 
-    log "DNS настроен: $chosen_name (DoT + DoH fallback)"
+    log "DNS настроен: $chosen_name (DoT + DoH)"
     log "  DoT: $chosen_sni ($chosen_ip)"
     [[ -n "$doh_url" ]] && log "  DoH: $doh_url"
 }

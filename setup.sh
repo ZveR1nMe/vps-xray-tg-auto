@@ -7,6 +7,7 @@ set -euo pipefail
 INSTALL_DIR="/opt/vps-setup"
 XRAY_DIR="/opt/xray"
 REPO_URL="https://github.com/ZveR1nMe/vps-xray-tg-auto"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $1"; }
@@ -281,8 +282,8 @@ log "Лучший SNI: $BEST_SNI"
 
 log "Генерация ключей..."
 KEYS_OUTPUT=$("$XRAY_DIR/xray" x25519)
-PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | grep "PrivateKey" | awk '{print $2}')
-PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | grep "Password" | awk '{print $2}')
+PRIVATE_KEY=$(echo "$KEYS_OUTPUT" | grep -i "private" | awk '{print $NF}')
+PUBLIC_KEY=$(echo "$KEYS_OUTPUT" | grep -i "public" | awk '{print $NF}')
 SHORT_ID=$(openssl rand -hex 4)
 
 log "Public Key: $PUBLIC_KEY"
@@ -290,8 +291,8 @@ log "Public Key: $PUBLIC_KEY"
 # --- SOCKS5 прокси для Telegram ---
 
 SOCKS_PORT=$(shuf -i 10000-60000 -n 1)
-SOCKS_USER=$(openssl rand -hex 5)
-SOCKS_PASS=$(openssl rand -hex 5)
+SOCKS_USER=$(openssl rand -hex 8)
+SOCKS_PASS=$(openssl rand -hex 16)
 log "SOCKS5 прокси: порт $SOCKS_PORT"
 ufw allow "$SOCKS_PORT"/tcp comment 'SOCKS5 Telegram'
 
