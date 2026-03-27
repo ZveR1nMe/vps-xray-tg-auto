@@ -418,6 +418,185 @@ setup_awg_config() {
     fi
 }
 
+# --- Очистка ДО установки (убрать конфликты) ---
+cleanup_before() {
+    log "Проверка конфликтующих сервисов..."
+    local cleaned=0
+
+    # 1. Старый AWG скрипт (S89amnezia-wg-quick) — заменён на S52awg-opkgtun0
+    if ssh_exec "test -f /opt/etc/init.d/S89amnezia-wg-quick && echo yes" | grep -q "yes"; then
+        warn "Найден старый AWG скрипт S89amnezia-wg-quick — удаляю"
+        ssh_exec "/opt/etc/init.d/S89amnezia-wg-quick stop 2>/dev/null" || true
+        ssh_exec "rm -f /opt/etc/init.d/S89amnezia-wg-quick"
+        cleaned=$((cleaned + 1))
+    fi
+
+    # 2. Shadowsocks — обычно не нужен при AWG
+    if ssh_exec "test -f /opt/etc/init.d/S22shadowsocks && echo yes" | grep -q "yes"; then
+        local ss_running
+        ss_running=$(ssh_exec "ps w | grep -v grep | grep shadowsocks" || true)
+        if [[ -n "$ss_running" ]]; then
+            warn "Найден Shadowsocks (запущен)"
+        else
+            warn "Найден Shadowsocks (не запущен)"
+        fi
+        echo ""
+        read -rp "  Удалить Shadowsocks? (y/n): " DEL_SS
+        if [[ "${DEL_SS,,}" == "y" ]]; then
+            ssh_exec "/opt/etc/init.d/S22shadowsocks stop 2>/dev/null" || true
+            ssh_exec "rm -f /opt/etc/init.d/S22shadowsocks"
+            ssh_exec "opkg remove shadowsocks-libev 2>/dev/null" || true
+            log "Shadowsocks удалён"
+            cleaned=$((cleaned + 1))
+        fi
+    fi
+
+    # 3. dnscrypt-proxy — конфликтует с системным DNS (stubby/https_dns_proxy)
+    if ssh_exec "test -f /opt/sbin/dnscrypt-proxy && echo yes" | grep -q "yes"; then
+        # Проверить, есть ли системный DNS (stubby или https_dns_proxy)
+        local system_dns
+        system_dns=$(ssh_exec "ps w | grep -v grep | grep -c 'stubby\|https_dns_proxy'" || echo "0")
+
+        if [[ "$system_dns" -gt 0 ]]; then
+            warn "Найден dnscrypt-proxy (13MB RAM), но Keenetic уже имеет встроенный DNS-over-TLS/HTTPS"
+            warn "  Запущено системных DNS процессов: $system_dns"
+            echo ""
+            read -rp "  Удалить dnscrypt-proxy (рекомендуется)? (y/n): " DEL_DNS
+            if [[ "${DEL_DNS,,}" == "y" ]]; then
+                ssh_exec "/opt/etc/init.d/S09dnscrypt-proxy2 stop 2>/dev/null" || true
+                ssh_exec "rm -f /opt/etc/init.d/S09dnscrypt-proxy2"
+                ssh_exec "opkg remove dnscrypt-proxy2 2>/dev/null" || true
+                ssh_exec "rm -f /opt/sbin/dnscrypt-proxy"
+                ssh_exec "rm -rf /opt/etc/dnscrypt-proxy.toml /opt/etc/dnscrypt-proxy"
+                log "dnscrypt-proxy удалён (экономия ~13MB диска + ~500MB RAM)"
+                cleaned=$((cleaned + 1))
+            fi
+        else
+            log "dnscrypt-proxy — единственный DNS, оставляю"
+        fi
+    fi
+
+    # 4. Entware dnsmasq — конфликтует с системным
+    if ssh_exec "test -f /opt/etc/init.d/S56dnsmasq && echo yes" | grep -q "yes"; then
+        local system_dnsmasq
+        system_dnsmasq=$(ssh_exec "ps w | grep -v grep | grep -v '/opt' | grep -c dnsmasq" || echo "0")
+
+        if [[ "$system_dnsmasq" -gt 0 ]]; then
+            warn "Найден Entware dnsmasq, но системный dnsmasq уже запущен"
+            echo ""
+            read -rp "  Удалить Entware dnsmasq? (y/n): " DEL_DNSMASQ
+            if [[ "${DEL_DNSMASQ,,}" == "y" ]]; then
+                ssh_exec "/opt/etc/init.d/S56dnsmasq stop 2>/dev/null" || true
+                ssh_exec "rm -f /opt/etc/init.d/S56dnsmasq"
+                ssh_exec "opkg remove dnsmasq-full 2>/dev/null; opkg remove dnsmasq 2>/dev/null" || true
+                log "Entware dnsmasq удалён"
+                cleaned=$((cleaned + 1))
+            fi
+        fi
+    fi
+
+    # 5. MagiTrickle — заменён DNS-маршрутами Keenetic
+    if ssh_exec "test -f /opt/bin/magitrickled && echo yes" | grep -q "yes"; then
+        warn "Найден MagiTrickle — заменён DNS-маршрутами KeenOS 5.0"
+        ssh_exec "/opt/etc/init.d/S99magitrickle stop 2>/dev/null" || true
+        ssh_exec "rm -f /opt/etc/init.d/S99magitrickle /opt/bin/magitrickled"
+        ssh_exec "rm -rf /opt/etc/magitrickle /opt/usr/share/magitrickle /opt/var/lib/magitrickle"
+        ssh_exec "rm -f /opt/etc/ndm/netfilter.d/100-magitrickle"
+        ssh_exec "rm -f /opt/lib/opkg/lists/magitrickle_*"
+        log "MagiTrickle удалён"
+        cleaned=$((cleaned + 1))
+    fi
+
+    # 6. opkg.conf дубликаты
+    local dup_count
+    dup_count=$(ssh_exec "grep -c 'src/gz entware' /opt/etc/opkg.conf 2>/dev/null" || echo "0")
+    if [[ "$dup_count" -gt 1 ]]; then
+        warn "Дубликаты в opkg.conf ($dup_count записей entware) — исправляю"
+        ssh_exec "cat > /opt/etc/opkg.conf << 'OPKG'
+src/gz entware http://bin.entware.net/mipselsf-k3.4
+src/gz keendev http://bin.entware.net/mipselsf-k3.4/keenetic
+dest root /
+lists_dir ext /opt/var/opkg-lists
+arch all 100
+arch mipsel-3.4 150
+arch mipsel-3.4_kn 200
+OPKG"
+        log "opkg.conf исправлен"
+        cleaned=$((cleaned + 1))
+    fi
+
+    # 7. Старые DNS-маршруты NDMS (от предыдущих ручных настроек)
+    local old_routes
+    old_routes=$(ndmc_exec "show running-config" | grep "ip route .* OpkgTun0" || true)
+    if [[ -n "$old_routes" ]]; then
+        warn "Найдены старые ip route через OpkgTun0 — удаляю"
+        while IFS= read -r route_line; do
+            [[ -z "$route_line" ]] && continue
+            ndmc_exec "no $route_line" 2>/dev/null || true
+        done <<< "$old_routes"
+        ndmc_exec "system configuration save"
+        log "Старые маршруты удалены"
+        cleaned=$((cleaned + 1))
+    fi
+
+    if [[ $cleaned -gt 0 ]]; then
+        log "Очистка завершена: удалено $cleaned конфликтов"
+    else
+        log "Конфликтов не найдено"
+    fi
+}
+
+# --- Очистка ПОСЛЕ установки (убрать мусор) ---
+cleanup_after() {
+    log "Очистка временных файлов..."
+    local freed=0
+
+    # 1. Установочные .ipk файлы
+    if ssh_exec "test -d /opt/root/awg2-go && echo yes" | grep -q "yes"; then
+        local ipk_size
+        ipk_size=$(ssh_exec "du -sk /opt/root/awg2-go/ 2>/dev/null | awk '{print \$1}'" || echo "0")
+        ssh_exec "rm -rf /opt/root/awg2-go"
+        log "  Удалены .ipk пакеты (${ipk_size}KB)"
+        freed=$((freed + ipk_size))
+    fi
+
+    # 2. opkg кэш
+    if ssh_exec "test -d /opt/var/opkg-lists && echo yes" | grep -q "yes"; then
+        local cache_size
+        cache_size=$(ssh_exec "du -sk /opt/var/opkg-lists/ 2>/dev/null | awk '{print \$1}'" || echo "0")
+        ssh_exec "rm -rf /opt/var/opkg-lists/*"
+        log "  Очищен кэш opkg (${cache_size}KB)"
+        freed=$((freed + cache_size))
+    fi
+
+    # 3. Логи
+    ssh_exec "rm -f /opt/var/log/*.log 2>/dev/null" || true
+
+    # 4. Bash/shell history
+    ssh_exec "rm -f /opt/root/.ash_history /opt/root/.bash_history 2>/dev/null" || true
+
+    # 5. wget/curl temp files
+    ssh_exec "rm -f /opt/root/.wget-hsts 2>/dev/null" || true
+
+    # 6. Осиротевшие библиотеки (после удаления пакетов)
+    ssh_exec "opkg --autoremove remove 2>/dev/null" || true
+
+    local freed_mb=$((freed / 1024))
+    if [[ $freed_mb -gt 0 ]]; then
+        log "Освобождено: ~${freed_mb}MB"
+    fi
+
+    # Показать итог
+    local opt_used opt_free
+    opt_used=$(ssh_exec "df -h /opt 2>/dev/null | tail -1 | awk '{print \$3}'")
+    opt_free=$(ssh_exec "df -h /opt 2>/dev/null | tail -1 | awk '{print \$4}'")
+    log "Хранилище: занято $opt_used, свободно $opt_free"
+
+    local ram_used ram_free
+    ram_free=$(ssh_exec "free | grep Mem | awk '{print int(\$4/1024)}'")
+    log "RAM свободно: ${ram_free}MB"
+}
+
 # --- DNS маршруты ---
 setup_dns_routes() {
     echo ""
@@ -502,11 +681,13 @@ main() {
 
     check_connection || return 1
     detect_router || return 1
+    cleanup_before
     setup_storage || return 1
     install_awg_go || return 1
     setup_opkgtun || return 1
     setup_awg_config || return 1
     setup_dns_routes
+    cleanup_after
 
     log "=========================================="
     log "  Роутер настроен!"
