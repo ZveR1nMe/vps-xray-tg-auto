@@ -597,6 +597,171 @@ cleanup_after() {
     log "RAM свободно: ${ram_free}MB"
 }
 
+# --- Выбор лучшего DNS ---
+setup_dns() {
+    log "Тестирование DNS-серверов..."
+
+    # DNS-over-TLS серверы для тестирования
+    declare -A DOT_SERVERS=(
+        ["AdGuard"]="94.140.14.14|dns.adguard-dns.com"
+        ["Cloudflare"]="1.1.1.1|cloudflare-dns.com"
+        ["Google"]="8.8.8.8|dns.google"
+        ["Quad9"]="9.9.9.9|dns.quad9.net"
+        ["NextDNS"]="45.90.28.0|dns.nextdns.io"
+    )
+
+    # DNS-over-HTTPS серверы
+    declare -A DOH_SERVERS=(
+        ["AdGuard"]="https://dns.adguard-dns.com/dns-query"
+        ["Cloudflare"]="https://cloudflare-dns.com/dns-query"
+        ["Google"]="https://dns.google/dns-query"
+        ["Quad9"]="https://dns.quad9.net:443/dns-query"
+    )
+
+    # Тестируем пинг до каждого DNS (с роутера)
+    log "  Тестирую задержку до DNS-серверов с роутера..."
+
+    local best_name="" best_time=9999 best_ip="" best_sni=""
+    local results=""
+
+    for name in "${!DOT_SERVERS[@]}"; do
+        local entry="${DOT_SERVERS[$name]}"
+        local ip="${entry%%|*}"
+        local sni="${entry##*|}"
+
+        # Пинг с роутера (3 пакета, таймаут 2с)
+        local avg_time
+        avg_time=$(ssh_exec "ping -c 3 -W 2 $ip 2>/dev/null | grep 'avg' | cut -d'/' -f5" | tr -d '[:space:]')
+
+        if [[ -z "$avg_time" ]]; then
+            # BusyBox ping может иметь другой формат
+            avg_time=$(ssh_exec "ping -c 3 -W 2 $ip 2>/dev/null | tail -1 | awk -F'/' '{print \$4}'" | tr -d '[:space:]')
+        fi
+
+        if [[ -n "$avg_time" && "$avg_time" != "" ]]; then
+            local time_int=${avg_time%%.*}
+            results+="    $name ($ip): ${avg_time}ms\n"
+
+            if [[ $time_int -lt $best_time ]]; then
+                best_time=$time_int
+                best_name=$name
+                best_ip=$ip
+                best_sni=$sni
+            fi
+        else
+            results+="    $name ($ip): timeout\n"
+        fi
+    done
+
+    echo -e "$results"
+
+    if [[ -z "$best_name" ]]; then
+        warn "Не удалось протестировать DNS. Использую AdGuard по умолчанию"
+        best_name="AdGuard"
+        best_ip="94.140.14.14"
+        best_sni="dns.adguard-dns.com"
+    fi
+
+    log "  Лучший DNS: $best_name ($best_ip, ${best_time}ms)"
+
+    # Предложить настройку
+    echo ""
+    echo "  Рекомендуемый DNS: $best_name (DoT: $best_sni)"
+    echo ""
+    echo "  Варианты:"
+    echo "   1) $best_name (рекомендуется, ${best_time}ms)"
+
+    # Показать топ-3
+    local opt=2
+    for name in "${!DOT_SERVERS[@]}"; do
+        [[ "$name" == "$best_name" ]] && continue
+        local entry="${DOT_SERVERS[$name]}"
+        local ip="${entry%%|*}"
+        echo "   $opt) $name ($ip)"
+        opt=$((opt + 1))
+        [[ $opt -gt 4 ]] && break
+    done
+    echo "   0) Не менять DNS"
+    echo ""
+    read -rp "  Выбор [1]: " DNS_CHOICE
+    DNS_CHOICE="${DNS_CHOICE:-1}"
+
+    if [[ "$DNS_CHOICE" == "0" ]]; then
+        log "DNS не изменён"
+        return 0
+    fi
+
+    # Определить выбранный сервер
+    local chosen_name="$best_name"
+    local chosen_ip="$best_ip"
+    local chosen_sni="$best_sni"
+
+    if [[ "$DNS_CHOICE" != "1" ]]; then
+        # Пользователь выбрал другой — найти по порядку
+        local idx=2
+        for name in "${!DOT_SERVERS[@]}"; do
+            [[ "$name" == "$best_name" ]] && continue
+            if [[ "$idx" == "$DNS_CHOICE" ]]; then
+                chosen_name="$name"
+                local entry="${DOT_SERVERS[$name]}"
+                chosen_ip="${entry%%|*}"
+                chosen_sni="${entry##*|}"
+                break
+            fi
+            idx=$((idx + 1))
+        done
+    fi
+
+    log "Настраиваю DNS: $chosen_name (DoT: $chosen_sni)"
+
+    # Удалить старые DNS upstream
+    local old_dns
+    old_dns=$(ndmc_exec "show running-config" | grep -E "tls upstream|https upstream" | grep "dns-proxy" || true)
+
+    # Настроить DoT через ndmc
+    # Сначала удалим старые
+    ndmc_exec "no dns-proxy tls upstream" 2>/dev/null || true
+    ndmc_exec "no dns-proxy https upstream" 2>/dev/null || true
+
+    # Добавить выбранный DoT (основной + резервный)
+    case "$chosen_name" in
+        "AdGuard")
+            ndmc_exec "dns-proxy tls upstream 94.140.14.14 sni dns.adguard-dns.com"
+            ndmc_exec "dns-proxy tls upstream 94.140.15.15 sni dns.adguard-dns.com"
+            ;;
+        "Cloudflare")
+            ndmc_exec "dns-proxy tls upstream 1.1.1.1 sni cloudflare-dns.com"
+            ndmc_exec "dns-proxy tls upstream 1.0.0.1 sni cloudflare-dns.com"
+            ;;
+        "Google")
+            ndmc_exec "dns-proxy tls upstream 8.8.8.8 sni dns.google"
+            ndmc_exec "dns-proxy tls upstream 8.8.4.4 sni dns.google"
+            ;;
+        "Quad9")
+            ndmc_exec "dns-proxy tls upstream 9.9.9.9 sni dns.quad9.net"
+            ndmc_exec "dns-proxy tls upstream 149.112.112.112 sni dns.quad9.net"
+            ;;
+        "NextDNS")
+            ndmc_exec "dns-proxy tls upstream 45.90.28.0 sni dns.nextdns.io"
+            ndmc_exec "dns-proxy tls upstream 45.90.30.0 sni dns.nextdns.io"
+            ;;
+    esac
+
+    # Добавить DoH как fallback
+    local doh_url="${DOH_SERVERS[$chosen_name]:-}"
+    if [[ -n "$doh_url" ]]; then
+        ndmc_exec "dns-proxy https upstream $doh_url dnsm"
+    fi
+
+    # Игнорировать DNS провайдера (важно для обхода блокировок)
+    ndmc_exec "dns-proxy no rebind-protect"
+    ndmc_exec "system configuration save"
+
+    log "DNS настроен: $chosen_name (DoT + DoH fallback)"
+    log "  DoT: $chosen_sni ($chosen_ip)"
+    [[ -n "$doh_url" ]] && log "  DoH: $doh_url"
+}
+
 # --- DNS маршруты ---
 setup_dns_routes() {
     echo ""
@@ -686,6 +851,7 @@ main() {
     install_awg_go || return 1
     setup_opkgtun || return 1
     setup_awg_config || return 1
+    setup_dns
     setup_dns_routes
     cleanup_after
 
