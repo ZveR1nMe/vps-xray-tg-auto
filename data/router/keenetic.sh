@@ -958,9 +958,8 @@ setup_dns() {
     # 4. Удаляем plain fallback
     # Если скрипт упадёт на любом шаге — интернет сохранится
 
-    log "  Добавляю временный DNS fallback..."
-    ndmc_exec "dns-proxy upstream 8.8.8.8" 2>/dev/null || true
-    ndmc_exec "dns-proxy upstream 1.1.1.1" 2>/dev/null || true
+    log "  Добавляю временный DNS fallback (Google DoT)..."
+    ndmc_exec "dns-proxy tls upstream 8.8.8.8 sni dns.google" 2>/dev/null || true
 
     # Добавить новый DoT (основной + резервный)
     case "$chosen_name" in
@@ -1002,26 +1001,29 @@ setup_dns() {
 
     # Теперь безопасно удалить старые DNS (новые уже работают)
     log "  Удаляю старые DNS upstream..."
-    # Получить список старых tls/https upstream и удалить те, что не относятся к выбранному
-    local old_tls
-    old_tls=$(ndmc_exec "show running-config" | grep "tls upstream" | grep -v "$chosen_sni" || true)
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        line=$(echo "$line" | sed 's/^[[:space:]]*//')
-        ndmc_exec "no dns-proxy $line" 2>/dev/null || true
-    done <<< "$old_tls"
 
-    local old_https
-    old_https=$(ndmc_exec "show running-config" | grep "https upstream" | grep -v "${doh_url:-NONE}" || true)
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        line=$(echo "$line" | sed 's/^[[:space:]]*//')
-        ndmc_exec "no dns-proxy $line" 2>/dev/null || true
-    done <<< "$old_https"
+    # Удалить старые DoT (кроме выбранного)
+    local old_tls_ips
+    old_tls_ips=$(ndmc_exec "show running-config" | grep "tls upstream" | grep -v "$chosen_sni" | awk '{print $3}' || true)
+    while IFS= read -r ip; do
+        [[ -z "$ip" ]] && continue
+        ip=$(echo "$ip" | tr -d '[:space:]')
+        ndmc_exec "dns-proxy no tls upstream $ip" 2>/dev/null || true
+    done <<< "$old_tls_ips"
 
-    # Удалить временный plain DNS fallback
-    ndmc_exec "no dns-proxy upstream 8.8.8.8" 2>/dev/null || true
-    ndmc_exec "no dns-proxy upstream 1.1.1.1" 2>/dev/null || true
+    # Удалить старые DoH (кроме выбранного)
+    local old_https_urls
+    old_https_urls=$(ndmc_exec "show running-config" | grep "https upstream" | grep -v "${doh_url:-NONE}" | awk '{print $3}' || true)
+    while IFS= read -r url; do
+        [[ -z "$url" ]] && continue
+        url=$(echo "$url" | tr -d '[:space:]')
+        ndmc_exec "dns-proxy no https upstream $url" 2>/dev/null || true
+    done <<< "$old_https_urls"
+
+    # Удалить временный Google DoT fallback (если он не был выбран основным)
+    if [[ "$chosen_name" != "Google" ]]; then
+        ndmc_exec "dns-proxy no tls upstream 8.8.8.8" 2>/dev/null || true
+    fi
 
     # Игнорировать DNS провайдера (важно для обхода блокировок)
     ndmc_exec "dns-proxy no rebind-protect"
