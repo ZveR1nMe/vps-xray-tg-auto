@@ -40,45 +40,203 @@ check_connection() {
     log "Подключение OK"
 }
 
-# --- Проверка и установка Entware ---
-check_entware() {
-    log "Проверка Entware..."
+# --- Определение модели и характеристик роутера ---
+detect_router() {
+    log "Определение модели роутера..."
+
+    ROUTER_MODEL=$(ndmc_exec "show version" | grep "device:" | awk '{print $2}' | tr -d '[:space:]')
+    ROUTER_HW_ID=$(ndmc_exec "show version" | grep "hw_id:" | awk '{print $2}' | tr -d '[:space:]')
+    ROUTER_FW=$(ndmc_exec "show version" | grep "title:" | awk '{print $2}' | tr -d '[:space:]')
+    ROUTER_ARCH=$(ssh_exec "uname -m" | tr -d '[:space:]')
+    ROUTER_SOC=$(ssh_exec "cat /proc/cpuinfo 2>/dev/null | grep 'system type' | head -1 | cut -d: -f2" | tr -d '[:space:]')
+    ROUTER_RAM_KB=$(ssh_exec "grep MemTotal /proc/meminfo | awk '{print \$2}'" | tr -d '[:space:]')
+    ROUTER_RAM_MB=$((ROUTER_RAM_KB / 1024))
+
+    log "  Модель: $ROUTER_MODEL ($ROUTER_HW_ID)"
+    log "  Прошивка: KeeneticOS $ROUTER_FW"
+    log "  SoC: $ROUTER_SOC"
+    log "  Архитектура: $ROUTER_ARCH"
+    log "  RAM: ${ROUTER_RAM_MB} MB"
+
+    # Определение суффикса пакетов
+    case "$ROUTER_ARCH" in
+        mips|mipsel) AWG_PKG_SUFFIX="mipsel-3.4" ;;
+        aarch64)     AWG_PKG_SUFFIX="aarch64-3.10" ;;
+        *)
+            err "Неподдерживаемая архитектура: $ROUTER_ARCH"
+            return 1
+            ;;
+    esac
+    log "  Пакеты: $AWG_PKG_SUFFIX"
+
+    # Проверка внутренней памяти
+    INTERNAL_FREE_KB=$(ssh_exec "df /tmp 2>/dev/null | tail -1 | awk '{print \$4}'" | tr -d '[:space:]')
+    INTERNAL_FREE_MB=$((INTERNAL_FREE_KB / 1024))
+    log "  Внутренняя память (tmpfs): ${INTERNAL_FREE_MB} MB свободно"
+}
+
+# --- Проверка и подготовка хранилища ---
+setup_storage() {
+    log "Проверка хранилища для Entware..."
+
+    # Проверить, есть ли уже Entware
     if ssh_exec "test -f /opt/bin/opkg && echo yes" | grep -q "yes"; then
-        log "Entware установлен"
+        local opt_disk
+        opt_disk=$(ssh_exec "df /opt 2>/dev/null | tail -1 | awk '{print \$1}'")
+        local opt_free
+        opt_free=$(ssh_exec "df -h /opt 2>/dev/null | tail -1 | awk '{print \$4}'")
+        log "Entware уже установлен на $opt_disk (свободно: $opt_free)"
         return 0
     fi
 
     warn "Entware не установлен"
-    # Проверить USB
-    if ! ssh_exec "mount | grep /tmp/mnt" | grep -q "/tmp/mnt"; then
-        err "USB-накопитель не найден. Подключите USB и установите Entware:"
-        err "  https://help.keenetic.com/hc/ru/articles/360021214160"
+
+    # Проверить USB-накопитель
+    local usb_device
+    usb_device=$(ssh_exec "ls /dev/sd[a-z] 2>/dev/null | head -1" | tr -d '[:space:]')
+
+    local usb_mounted
+    usb_mounted=$(ssh_exec "mount | grep /tmp/mnt" | head -1)
+
+    if [[ -n "$usb_device" || -n "$usb_mounted" ]]; then
+        log "USB-накопитель обнаружен"
+
+        if [[ -n "$usb_mounted" ]]; then
+            local usb_fs
+            usb_fs=$(echo "$usb_mounted" | awk '{print $5}')
+            local usb_mount_point
+            usb_mount_point=$(echo "$usb_mounted" | awk '{print $3}')
+            local usb_size
+            usb_size=$(ssh_exec "df -h $usb_mount_point 2>/dev/null | tail -1 | awk '{print \$2}'")
+            log "  Смонтирован: $usb_mount_point ($usb_fs, $usb_size)"
+
+            echo ""
+            echo "  USB уже содержит данные. Варианты:"
+            echo "   1) Использовать как есть (установить Entware на текущий раздел)"
+            echo "   2) Отформатировать USB в ext4 (ВСЕ ДАННЫЕ БУДУТ УДАЛЕНЫ)"
+            echo "   3) Пропустить (установить на внутреннюю память, если хватит места)"
+            echo ""
+            read -rp "  Выбор [1/2/3]: " STORAGE_CHOICE
+        else
+            # USB есть, но не смонтирован — нужно форматировать
+            log "  USB обнаружен ($usb_device), но не смонтирован"
+            STORAGE_CHOICE="2"
+            echo ""
+            read -rp "  Отформатировать USB в ext4? (y/n): " FORMAT_CONFIRM
+            if [[ "${FORMAT_CONFIRM,,}" != "y" ]]; then
+                STORAGE_CHOICE="3"
+            fi
+        fi
+    else
+        log "  USB-накопитель не найден"
+        STORAGE_CHOICE="3"
+    fi
+
+    case "${STORAGE_CHOICE:-1}" in
+        1)
+            # Использовать существующий USB
+            _install_entware_usb
+            ;;
+        2)
+            # Форматировать USB
+            _format_and_install_usb "$usb_device"
+            ;;
+        3)
+            # Попробовать внутреннюю память
+            _install_entware_internal
+            ;;
+    esac
+}
+
+_format_and_install_usb() {
+    local device="${1:-}"
+    if [[ -z "$device" ]]; then
+        device=$(ssh_exec "ls /dev/sd[a-z] 2>/dev/null | head -1" | tr -d '[:space:]')
+    fi
+
+    if [[ -z "$device" ]]; then
+        err "USB-устройство не найдено"
         return 1
     fi
 
-    log "USB найден, устанавливаю Entware..."
-    ndmc_exec "opkg disk $(ssh_exec 'ls /tmp/mnt/' | head -1):"
+    log "Форматирование $device в ext4..."
+
+    # Отмонтировать если смонтировано
+    ssh_exec "umount ${device}* 2>/dev/null" || true
+    sleep 1
+
+    # Создать один раздел и форматировать
+    ssh_exec "echo -e 'o\nn\np\n1\n\n\nw' | fdisk $device 2>/dev/null" || true
+    sleep 1
+    ssh_exec "mkfs.ext4 -F ${device}1 2>&1 || mkfs.ext4 -F ${device} 2>&1"
+    sleep 1
+
+    log "USB отформатирован"
+
+    # Перезагрузить USB через ndmc
+    ndmc_exec "system usb detach"
+    sleep 2
+    ndmc_exec "system usb attach"
+    sleep 5
+
+    _install_entware_usb
+}
+
+_install_entware_usb() {
+    log "Установка Entware на USB..."
+
+    # Найти точку монтирования USB
+    local usb_id
+    usb_id=$(ssh_exec "ls /tmp/mnt/ 2>/dev/null | head -1" | tr -d '[:space:]')
+
+    if [[ -z "$usb_id" ]]; then
+        err "USB не смонтирован. Попробуйте перезагрузить роутер с USB и запустить скрипт заново."
+        return 1
+    fi
+
+    log "  USB ID: $usb_id"
+    ndmc_exec "opkg disk ${usb_id}:"
     sleep 5
     ndmc_exec "opkg initrc /opt/etc/init.d/rc.unslung"
     sleep 3
 
     if ssh_exec "test -f /opt/bin/opkg && echo yes" | grep -q "yes"; then
-        log "Entware установлен"
+        log "Entware установлен на USB"
     else
-        err "Не удалось установить Entware автоматически"
+        err "Не удалось установить Entware на USB"
         return 1
     fi
 }
 
-# --- Определение архитектуры ---
-detect_arch() {
-    local arch
-    arch=$(ssh_exec "uname -m" | tr -d '[:space:]')
-    case "$arch" in
-        mipsel|mips) echo "${arch}el" ;; # normalize
-        aarch64) echo "aarch64" ;;
-        *) echo "$arch" ;;
-    esac
+_install_entware_internal() {
+    # Проверить, поддерживает ли роутер установку на внутреннюю память
+    # Нужно минимум ~30MB свободного tmpfs (AWG-Go ~20MB + Entware ~10MB)
+    local min_required=30
+
+    if [[ $INTERNAL_FREE_MB -lt $min_required ]]; then
+        err "Недостаточно внутренней памяти (${INTERNAL_FREE_MB}MB свободно, нужно ${min_required}MB)"
+        err "Подключите USB-накопитель и запустите скрипт заново"
+        return 1
+    fi
+
+    warn "Установка на внутреннюю память — данные пропадут при перезагрузке!"
+    echo ""
+    read -rp "  Продолжить? (y/n): " INTERNAL_CONFIRM
+    if [[ "${INTERNAL_CONFIRM,,}" != "y" ]]; then
+        err "Прервано. Подключите USB для постоянной установки."
+        return 1
+    fi
+
+    log "Установка Entware на внутреннюю память..."
+    ndmc_exec "opkg initrc /opt/etc/init.d/rc.unslung"
+    sleep 3
+
+    if ssh_exec "test -f /opt/bin/opkg && echo yes" | grep -q "yes"; then
+        warn "Entware установлен на внутреннюю память (НЕ переживёт перезагрузку!)"
+    else
+        err "Не удалось установить Entware"
+        return 1
+    fi
 }
 
 # --- Установка AWG-Go ---
@@ -89,23 +247,18 @@ install_awg_go() {
         return 0
     fi
 
-    local arch
-    arch=$(detect_arch)
-    log "Архитектура: $arch"
-
-    local pkg_suffix
-    case "$arch" in
-        mipsel|mips*) pkg_suffix="mipsel-3.4" ;;
-        aarch64) pkg_suffix="aarch64-3.10" ;;
-        *) err "Неподдерживаемая архитектура: $arch"; return 1 ;;
-    esac
+    # AWG_PKG_SUFFIX определяется в detect_router()
+    if [[ -z "${AWG_PKG_SUFFIX:-}" ]]; then
+        err "Архитектура не определена (detect_router не был вызван)"
+        return 1
+    fi
 
     local gitlab_base="https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main/blob/01__Entware_AWG-Go_Install"
 
-    log "Скачиваю пакеты для $pkg_suffix..."
+    log "Скачиваю пакеты для $AWG_PKG_SUFFIX..."
     ssh_exec "mkdir -p /opt/root/awg2-go && cd /opt/root/awg2-go && \
-        curl -sLOf '${gitlab_base}/amneziawg-tools_1.0.20250903-2_${pkg_suffix}.ipk' && \
-        curl -sLOf '${gitlab_base}/amneziawg-go_v0.2.16-1_${pkg_suffix}.ipk'"
+        curl -sLOf '${gitlab_base}/amneziawg-tools_1.0.20250903-2_${AWG_PKG_SUFFIX}.ipk' && \
+        curl -sLOf '${gitlab_base}/amneziawg-go_v0.2.16-1_${AWG_PKG_SUFFIX}.ipk'"
 
     log "Устанавливаю AWG-Go..."
     ssh_exec "opkg update 2>/dev/null; \
@@ -263,7 +416,8 @@ main() {
     log "=========================================="
 
     check_connection || return 1
-    check_entware || return 1
+    detect_router || return 1
+    setup_storage || return 1
     install_awg_go || return 1
     setup_opkgtun || return 1
     setup_awg_config || return 1
