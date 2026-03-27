@@ -111,7 +111,7 @@ async def main() -> None:
     dp.include_router(root)
 
     monitor = Monitor(bot, config.chat_id)
-    asyncio.create_task(monitor.run())
+    monitor_task = asyncio.create_task(monitor.run(), name="monitor")
 
     await bot.set_my_commands([BotCommand(command="start", description="Главное меню")])
 
@@ -121,6 +121,11 @@ async def main() -> None:
     try:
         await dp.start_polling(bot)
     finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
 
 

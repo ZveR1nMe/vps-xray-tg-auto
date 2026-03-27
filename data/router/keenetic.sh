@@ -12,7 +12,7 @@
 set -uo pipefail
 
 # Определяем директорию скрипта (для dns-lists)
-if [[ "${BASH_SOURCE[0]}" == *"bash"* || "${BASH_SOURCE[0]}" == "/dev/"* ]]; then
+if [[ ! -f "${BASH_SOURCE[0]}" ]]; then
     # Запущен через curl/pipe — скачаем dns-lists во временную папку
     SCRIPT_DIR="/tmp/keenetic-setup"
     mkdir -p "$SCRIPT_DIR"
@@ -32,7 +32,7 @@ err()  { echo -e "${RED}[router]${NC} $1" >&2; }
 ROUTER_IP="${ROUTER_IP:-}"
 ROUTER_ADMIN_USER="${ROUTER_ADMIN_USER:-admin}"
 ROUTER_ADMIN_PASS="${ROUTER_ADMIN_PASS:-}"
-ROUTER_ENTWARE_PASS="${ROUTER_ENTWARE_PASS:-keenetic}"
+ROUTER_ENTWARE_PASS="${ROUTER_ENTWARE_PASS:-}"
 AWG_CLIENT_CONF="${AWG_CLIENT_CONF:-}"
 AWG_CLIENT_IP="${AWG_CLIENT_IP:-10.8.1.2}"
 
@@ -43,13 +43,18 @@ HAS_ADMIN_CLI=false
 # SSH для Entware (порт 222, root)
 ENTWARE_SSH_ARGS=()
 ssh_exec() {
-    sshpass -p "$ROUTER_ENTWARE_PASS" ssh "${ENTWARE_SSH_ARGS[@]}" "$1" 2>&1
+    SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e ssh "${ENTWARE_SSH_ARGS[@]}" "$1" 2>&1
 }
 
 # ndmc через Entware SSH (если доступен) или через telnet (если нет)
 ndmc_exec() {
+    local cmd="$1"
+    cmd="${cmd//\\/\\\\}"
+    cmd="${cmd//\"/\\\"}"
+    cmd="${cmd//\$/\\\$}"
+    cmd="${cmd//\`/\\\`}"
     if [[ "$HAS_ENTWARE_SSH" == true ]]; then
-        sshpass -p "$ROUTER_ENTWARE_PASS" ssh "${ENTWARE_SSH_ARGS[@]}" "ndmc -c \"$1\"" 2>&1
+        SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e ssh "${ENTWARE_SSH_ARGS[@]}" "ndmc -c \"$cmd\"" 2>&1
     else
         _ndmc_via_telnet "$1"
     fi
@@ -112,8 +117,12 @@ ask_credentials() {
     # Запросить данные для Entware SSH (если порт открыт)
     if [[ "$port_222_open" == true ]]; then
         if [[ -z "$ROUTER_ENTWARE_PASS" ]]; then
-            read -rp "  Пароль Entware SSH (порт 222) [keenetic]: " ROUTER_ENTWARE_PASS
-            ROUTER_ENTWARE_PASS="${ROUTER_ENTWARE_PASS:-keenetic}"
+            read -rsp "  Пароль Entware SSH (порт 222): " ROUTER_ENTWARE_PASS
+            echo ""
+            if [[ -z "$ROUTER_ENTWARE_PASS" ]]; then
+                err "Пароль Entware SSH обязателен"
+                return 1
+            fi
         fi
     fi
 
@@ -139,7 +148,7 @@ check_connection() {
 
     # Попробовать Entware SSH (порт 222)
     if nc -z -w3 "$ROUTER_IP" 222 2>/dev/null; then
-        ENTWARE_SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p 222 "root@$ROUTER_IP")
+        ENTWARE_SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p 222 "root@$ROUTER_IP")
 
         if ssh_exec "echo ok" 2>/dev/null | grep -q "ok"; then
             HAS_ENTWARE_SSH=true
@@ -416,7 +425,7 @@ _install_entware_usb() {
     local retry=0
     while [[ $retry -lt 10 ]]; do
         if nc -z -w3 "$ROUTER_IP" 222 2>/dev/null; then
-            ENTWARE_SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p 222 "root@$ROUTER_IP")
+            ENTWARE_SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p 222 "root@$ROUTER_IP")
             if ssh_exec "echo ok" 2>/dev/null | grep -q "ok"; then
                 HAS_ENTWARE_SSH=true
                 log "Entware установлен на USB, SSH:222 доступен"
@@ -609,7 +618,8 @@ setup_opkgtun() {
     fi
 
     ndmc_exec "interface OpkgTun0 ip address $AWG_CLIENT_IP 255.255.255.255"
-    ndmc_exec "interface OpkgTun0 ip mtu 1376"
+    # MTU: 1500 - 60(WG overhead) - 100(AWG obfuscation + запас) = 1340
+    ndmc_exec "interface OpkgTun0 ip mtu 1340"
     ndmc_exec "interface OpkgTun0 ip tcp adjust-mss pmtu"
     ndmc_exec "interface OpkgTun0 up"
     ndmc_exec "system configuration save"
@@ -647,7 +657,7 @@ setup_awg_config() {
     ssh_exec "mkdir -p /opt/etc/amnezia/amneziawg"
 
     # Передать конфиг через scp
-    sshpass -p "$ROUTER_ENTWARE_PASS" scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -P 222 "$AWG_CLIENT_CONF" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
+    SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e scp -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -P 222 "$AWG_CLIENT_CONF" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
     ssh_exec "chmod 600 /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
 
     # Скачать init.d скрипт

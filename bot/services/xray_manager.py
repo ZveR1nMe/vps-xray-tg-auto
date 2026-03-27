@@ -30,7 +30,9 @@ class XrayManager:
         return json.loads(self._path.read_text())
 
     def _write_config(self, config: dict) -> None:
-        self._path.write_text(json.dumps(config, indent=2))
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(config, indent=2))
+        tmp.rename(self._path)
 
     def _get_vless_inbound(self, config: dict) -> dict | None:
         for ib in config.get("inbounds", []):

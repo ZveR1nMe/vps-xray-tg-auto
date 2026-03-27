@@ -14,6 +14,17 @@ log()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[-]${NC} $1" >&2; }
 
+cleanup_on_error() {
+    if [[ $? -ne 0 ]]; then
+        err "Установка прервана. Система может быть в частично настроенном состоянии."
+        if [[ -n "${BOT_TOKEN:-}" && -n "${CHAT_ID:-}" ]]; then
+            curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                -d chat_id="$CHAT_ID" -d text="❌ Установка VPS прервана" > /dev/null 2>&1 || true
+        fi
+    fi
+}
+trap cleanup_on_error EXIT
+
 # --- Проверки ---
 
 if [[ $EUID -ne 0 ]]; then err "Запустите от root"; exit 1; fi
@@ -24,7 +35,10 @@ if ! grep -qi ubuntu /etc/os-release 2>/dev/null; then
 fi
 
 SERVER_IP=$(curl -s4 ifconfig.me || curl -s4 icanhazip.com)
-if [[ -z "$SERVER_IP" ]]; then err "Не удалось определить IP"; exit 1; fi
+if [[ -z "$SERVER_IP" ]] || ! [[ "$SERVER_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    err "Не удалось определить валидный IP: '$SERVER_IP'"
+    exit 1
+fi
 
 # --- Telegram credentials ---
 
@@ -183,7 +197,13 @@ mkdir -p "$XRAY_DIR"
 
 # Скачиваем последнюю версию
 XRAY_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name')
-XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip"
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)       XRAY_ARCH="64" ;;
+    aarch64|arm64) XRAY_ARCH="arm64-v8a" ;;
+    *)            err "Неподдерживаемая архитектура: $ARCH"; exit 1 ;;
+esac
+XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-${XRAY_ARCH}.zip"
 log "xray $XRAY_VERSION"
 
 wget -qO /tmp/xray.zip "$XRAY_URL"
@@ -291,6 +311,9 @@ log "Public Key: $PUBLIC_KEY"
 # --- SOCKS5 прокси для Telegram ---
 
 SOCKS_PORT=$(shuf -i 10000-60000 -n 1)
+while [[ "$SOCKS_PORT" == "$SSH_PORT" || "$SOCKS_PORT" == "443" ]]; do
+    SOCKS_PORT=$(shuf -i 10000-60000 -n 1)
+done
 SOCKS_USER=$(openssl rand -hex 8)
 SOCKS_PASS=$(openssl rand -hex 16)
 log "SOCKS5 прокси: порт $SOCKS_PORT"
@@ -419,7 +442,7 @@ AWG_SERVER_PUBKEY=$(echo "$AWG_SERVER_PRIVKEY" | awg pubkey)
 # Рандомный UDP порт
 AWG_PORT=$(shuf -i 10000-60000 -n 1)
 # Проверка коллизии портов
-while [[ "$AWG_PORT" == "${SOCKS_PORT:-}" ]]; do
+while [[ "$AWG_PORT" == "${SOCKS_PORT:-}" || "$AWG_PORT" == "443" || "$AWG_PORT" == "$SSH_PORT" ]]; do
     AWG_PORT=$(shuf -i 10000-60000 -n 1)
 done
 log "AWG порт: $AWG_PORT"
@@ -519,6 +542,13 @@ python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/bot/requirements.txt" -q
 
 # --- .env ---
+
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+    warn "Файл .env уже существует — перезаписываю. Секреты будут обновлены."
+    warn "Старый .env сохранён как .env.bak"
+    cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak"
+    chmod 600 "$INSTALL_DIR/.env.bak"
+fi
 
 cat > "$INSTALL_DIR/.env" << ENVFILE
 BOT_TOKEN=$BOT_TOKEN

@@ -2,6 +2,7 @@ import asyncio
 import psutil
 import time
 from aiogram import Router
+from bot.services.monitor import is_process_running, is_awg_running
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 router = Router()
@@ -23,27 +24,19 @@ async def cb_status(callback: CallbackQuery) -> None:
 
     services_lines = []
 
-    if getattr(config, "has_vless", False):
-        proc = await asyncio.create_subprocess_exec(
-            "pgrep", "-f", "xray", stdout=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-        xray_ok = proc.returncode == 0
+    if config.has_vless:
+        xray_ok = await is_process_running("xray")
         services_lines.append(f"Xray: {'✅' if xray_ok else '❌'}")
 
-    if getattr(config, "has_awg", False):
-        proc = await asyncio.create_subprocess_exec(
-            "pgrep", "-f", "awg-go", stdout=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-        awg_ok = proc.returncode == 0
+    if config.has_awg:
+        awg_ok = await is_awg_running()
         services_lines.append(f"AWG: {'✅' if awg_ok else '❌'}")
 
     services_text = "\n".join(services_lines) if services_lines else "Сервисы: нет данных"
 
     text = (
         f"📊 <b>Статус сервера</b>\n\n"
-        f"CPU: {psutil.cpu_percent(interval=0)}%\n"
+        f"CPU: {await asyncio.to_thread(psutil.cpu_percent, 1)}%\n"
         f"RAM: {mem.used / (1024**3):.1f}/{mem.total / (1024**3):.1f} GB\n"
         f"Disk: {disk.used / (1024**3):.1f}/{disk.total / (1024**3):.1f} GB\n"
         f"Swap: {swap.used / (1024**3):.1f}/{swap.total / (1024**3):.1f} GB\n"

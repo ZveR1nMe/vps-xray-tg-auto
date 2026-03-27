@@ -188,7 +188,7 @@ class AwgManager:
             f"PublicKey = {self._server_pubkey}",
             f"PresharedKey = {psk}",
             f"Endpoint = {self._server_ip}:{self._awg_port}",
-            "AllowedIPs = 0.0.0.0/0",
+            "AllowedIPs = 0.0.0.0/0, ::/0",
             "PersistentKeepalive = 25",
         ])
         return "\n".join(lines) + "\n"

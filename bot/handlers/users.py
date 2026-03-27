@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import logging
+import re
+
 import qrcode
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -13,6 +15,7 @@ from aiogram.types import (
 )
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 KEY_LABELS = {
     "vless": "VLESS Reality",
@@ -104,8 +107,8 @@ async def cb_users_add(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(AddUser.waiting_name)
 async def on_user_name(message: Message, state: FSMContext) -> None:
     name = message.text.strip()
-    if not name or len(name) > 32 or ":" in name:
-        await message.answer("Имя: 1-32 символа, без двоеточий (:)")
+    if not name or len(name) > 32 or not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9_\- ]+$', name):
+        await message.answer("Имя: 1-32 символа (буквы, цифры, пробел, дефис, подчёркивание)")
         return
 
     store = _deps().user_store
@@ -114,7 +117,7 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    store.add_user(name)
+    await store.add_user(name)
     await state.clear()
     await _show_user_card(message.answer, message.answer, name, f"✅ <b>{name}</b> добавлен!")
 
@@ -223,7 +226,7 @@ async def cb_add_key(callback: CallbackQuery) -> None:
             link = await deps.xray_mgr.add_client(name)
             clients = deps.xray_mgr.list_clients()
             uuid = next((c["id"] for c in clients if c["email"] == name), "")
-            store.add_key(name, "vless", {"uuid": uuid})
+            await store.add_key(name, "vless", {"uuid": uuid})
             await callback.message.delete()
             await _send_vless_card(callback.message.answer_photo, callback.message.answer, name, link)
 
@@ -231,7 +234,7 @@ async def cb_add_key(callback: CallbackQuery) -> None:
             client_ip = store.next_awg_ip()
             comment = f"{name} ({key_type})"
             peer_data = await deps.awg_mgr.add_peer(comment, client_ip)
-            store.add_key(name, key_type, {
+            await store.add_key(name, key_type, {
                 "private_key": peer_data["private_key"],
                 "public_key": peer_data["public_key"],
                 "psk": peer_data["psk"],
@@ -245,7 +248,8 @@ async def cb_add_key(callback: CallbackQuery) -> None:
             await _send_awg_card(callback.message, name, key_type, config_text)
 
     except Exception as e:
-        await callback.message.edit_text(f"❌ Ошибка: {e}")
+        logger.error("Failed to add key %s for %s: %s", key_type, name, e, exc_info=True)
+        await callback.message.edit_text("❌ Ошибка при добавлении ключа")
     await callback.answer()
 
 
@@ -313,7 +317,7 @@ async def cb_del_key_confirm(callback: CallbackQuery) -> None:
             if key_data and "public_key" in key_data:
                 await deps.awg_mgr.delete_peer(key_data["public_key"])
 
-        store.delete_key(name, key_type)
+        await store.delete_key(name, key_type)
         await callback.answer(f"✅ Ключ удалён")
     except Exception as e:
         await callback.answer(f"❌ {e}")
@@ -359,7 +363,7 @@ async def cb_del_user_confirm(callback: CallbackQuery) -> None:
                     await deps.awg_mgr.delete_peer(user_data[kt]["public_key"])
                 except Exception:
                     pass
-        store.delete_user(name)
+        await store.delete_user(name)
 
     await callback.answer(f"✅ {name} удалён")
     await cb_users(callback)
@@ -431,4 +435,4 @@ async def _send_awg_card(message: Message, name: str, key_type: str, config_text
             caption=f"📱 QR для {label}",
         )
     except Exception as e:
-        logging.getLogger(__name__).warning("QR failed: %s", e)
+        logger.warning("QR failed: %s", e)

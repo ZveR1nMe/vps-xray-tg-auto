@@ -16,7 +16,7 @@ err()  { echo -e "${RED}[router]${NC} $1" >&2; }
 
 CONF_FILE="${1:-}"
 ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
-ROUTER_PASS="${ROUTER_PASS:-keenetic}"
+ROUTER_PASS="${ROUTER_PASS:-}"
 
 # Запросить конфиг если не указан
 if [[ -z "$CONF_FILE" || ! -f "$CONF_FILE" ]]; then
@@ -33,35 +33,44 @@ fi
 read -rp "  IP роутера [192.168.1.1]: " input_ip
 ROUTER_IP="${input_ip:-$ROUTER_IP}"
 
-read -rsp "  Пароль Entware SSH [keenetic]: " input_pass
-echo ""
-ROUTER_PASS="${input_pass:-$ROUTER_PASS}"
+if [[ -z "$ROUTER_PASS" ]]; then
+    read -rsp "  Пароль Entware SSH: " ROUTER_PASS
+    echo ""
+    if [[ -z "$ROUTER_PASS" ]]; then
+        err "Пароль обязателен"
+        exit 1
+    fi
+else
+    read -rsp "  Пароль Entware SSH [***]: " input_pass
+    echo ""
+    ROUTER_PASS="${input_pass:-$ROUTER_PASS}"
+fi
 
-SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -p 222 "root@$ROUTER_IP")
+SSH_ARGS=(-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -p 222 "root@$ROUTER_IP")
 
 # Проверка подключения
 log "Подключаюсь к $ROUTER_IP..."
-if ! sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "echo ok" 2>/dev/null | grep -q "ok"; then
+if ! SSHPASS="$ROUTER_PASS" sshpass -e ssh "${SSH_ARGS[@]}" "echo ok" 2>/dev/null | grep -q "ok"; then
     err "Не удалось подключиться"
     exit 1
 fi
 
 # Бэкап старого конфига
 log "Бэкап текущего конфига..."
-sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "cp /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf.bak 2>/dev/null" || true
+SSHPASS="$ROUTER_PASS" sshpass -e ssh "${SSH_ARGS[@]}" "cp /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf.bak 2>/dev/null" || true
 
 # Загрузка нового
 log "Загружаю новый конфиг..."
-sshpass -p "$ROUTER_PASS" scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -P 222 "$CONF_FILE" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
-sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "chmod 600 /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
+SSHPASS="$ROUTER_PASS" sshpass -e scp -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -P 222 "$CONF_FILE" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
+SSHPASS="$ROUTER_PASS" sshpass -e ssh "${SSH_ARGS[@]}" "chmod 600 /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
 
 # Перезапуск AWG
 log "Перезапускаю AWG..."
-sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "/opt/etc/init.d/S52awg-opkgtun0 restart 2>&1" || true
+SSHPASS="$ROUTER_PASS" sshpass -e ssh "${SSH_ARGS[@]}" "/opt/etc/init.d/S52awg-opkgtun0 restart 2>&1" || true
 sleep 3
 
 # Проверка
-STATUS=$(sshpass -p "$ROUTER_PASS" ssh "${SSH_ARGS[@]}" "awg show 2>&1")
+STATUS=$(SSHPASS="$ROUTER_PASS" sshpass -e ssh "${SSH_ARGS[@]}" "awg show 2>&1")
 if echo "$STATUS" | grep -q "latest handshake"; then
     log "Готово! AWG подключён к новому серверу"
     echo "$STATUS" | grep -E "endpoint|handshake|transfer"

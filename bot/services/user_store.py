@@ -1,6 +1,7 @@
 """Единое хранилище пользователей — координатор между менеджерами."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -10,11 +11,15 @@ logger = logging.getLogger(__name__)
 
 USERS_FILE = Path("/opt/vps-setup/users.json")
 
+# Ключи, которые не должны сохраняться в users.json (секретные данные)
+_SENSITIVE_KEYS = {"private_key", "psk"}
+
 
 class UserStore:
     def __init__(self) -> None:
         self._path = USERS_FILE
         self._data: dict = {}
+        self._lock = asyncio.Lock()
         self.load()
 
     def load(self) -> None:
@@ -37,31 +42,36 @@ class UserStore:
     def user_exists(self, name: str) -> bool:
         return name in self._data
 
-    def add_user(self, name: str) -> None:
-        if name not in self._data:
-            self._data[name] = {}
+    async def add_user(self, name: str) -> None:
+        async with self._lock:
+            if name not in self._data:
+                self._data[name] = {}
+                self.save()
+
+    async def add_key(self, name: str, key_type: str, data: dict) -> None:
+        async with self._lock:
+            if name not in self._data:
+                self._data[name] = {}
+            safe_data = {k: v for k, v in data.items() if k not in _SENSITIVE_KEYS}
+            safe_data["created"] = datetime.now().isoformat(timespec="seconds")
+            self._data[name][key_type] = safe_data
             self.save()
 
-    def add_key(self, name: str, key_type: str, data: dict) -> None:
-        if name not in self._data:
-            self._data[name] = {}
-        data["created"] = datetime.now().isoformat(timespec="seconds")
-        self._data[name][key_type] = data
-        self.save()
+    async def delete_key(self, name: str, key_type: str) -> bool:
+        async with self._lock:
+            if name in self._data and key_type in self._data[name]:
+                del self._data[name][key_type]
+                self.save()
+                return True
+            return False
 
-    def delete_key(self, name: str, key_type: str) -> bool:
-        if name in self._data and key_type in self._data[name]:
-            del self._data[name][key_type]
-            self.save()
-            return True
-        return False
-
-    def delete_user(self, name: str) -> dict | None:
-        if name in self._data:
-            data = self._data.pop(name)
-            self.save()
-            return data
-        return None
+    async def delete_user(self, name: str) -> dict | None:
+        async with self._lock:
+            if name in self._data:
+                data = self._data.pop(name)
+                self.save()
+                return data
+            return None
 
     def get_key(self, name: str, key_type: str) -> dict | None:
         user = self._data.get(name, {})

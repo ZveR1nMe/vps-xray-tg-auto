@@ -10,10 +10,21 @@ import psutil
 logger = logging.getLogger(__name__)
 
 
-async def _is_process_running(pattern: str) -> bool:
+async def is_process_running(pattern: str) -> bool:
     proc = await asyncio.create_subprocess_exec(
         "pgrep", "-f", pattern,
         stdout=asyncio.subprocess.PIPE,
+    )
+    await proc.communicate()
+    return proc.returncode == 0
+
+
+async def is_awg_running() -> bool:
+    """Проверка AWG через awg show (kernel-модуль не виден через pgrep)."""
+    proc = await asyncio.create_subprocess_exec(
+        "awg", "show", "awg0",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     await proc.communicate()
     return proc.returncode == 0
@@ -36,7 +47,7 @@ class Monitor:
                     text = "⚠️ <b>Алерты</b>\n\n" + "\n".join(alerts)
                     await self._bot.send_message(self._chat_id, text, parse_mode="HTML")
             except Exception as e:
-                logger.error(f"Monitor: {e}")
+                logger.error("Monitor check failed: %s", e, exc_info=True)
             await asyncio.sleep(300)
 
     async def _check(self) -> list[str]:
@@ -59,13 +70,13 @@ class Monitor:
         from bot import deps as _deps_module
         config = _deps_module.config
 
-        if getattr(config, "has_vless", False):
-            xray_ok = await _is_process_running("xray")
+        if config.has_vless:
+            xray_ok = await is_process_running("xray")
             if not xray_ok:
                 alerts.append("🔴 xray не запущен!")
 
-        if getattr(config, "has_awg", False):
-            awg_ok = await _is_process_running("awg-go")
+        if config.has_awg:
+            awg_ok = await is_awg_running()
             if not awg_ok:
                 alerts.append("🔴 amneziawg не запущен!")
 
