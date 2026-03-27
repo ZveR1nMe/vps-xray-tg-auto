@@ -1080,7 +1080,8 @@ setup_dns_routes() {
     echo "   7) Discord"
     echo "   8) Reddit"
     echo "   9) Spotify"
-    echo "  10) Все"
+    echo "  10) Anthropic/Claude AI"
+    echo "  11) Все"
     echo "   0) Пропустить"
     echo ""
     read -rp "  Введите номера через пробел (например: 1 2 4): " SELECTED
@@ -1101,11 +1102,12 @@ setup_dns_routes() {
         [7]="discord"
         [8]="reddit"
         [9]="spotify"
+        [10]="anthropic"
     )
 
     local services=()
-    if [[ "$SELECTED" == "10" ]]; then
-        services=(youtube instagram facebook telegram whatsapp twitter discord reddit spotify)
+    if [[ "$SELECTED" == "11" ]]; then
+        services=(youtube instagram facebook telegram whatsapp twitter discord reddit spotify anthropic)
     else
         for num in $SELECTED; do
             if [[ -n "${SERVICE_MAP[$num]:-}" ]]; then
