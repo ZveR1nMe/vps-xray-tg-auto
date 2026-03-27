@@ -71,6 +71,8 @@ detect_router() {
     log "  RAM: ${ROUTER_RAM_MB} MB"
 
     # Определение суффикса пакетов
+    # uname -m на Keenetic возвращает "mips" даже для mipsel (little-endian)
+    # Entware всегда mipsel на MT7621/MT7628
     case "$ROUTER_ARCH" in
         mips|mipsel) AWG_PKG_SUFFIX="mipsel-3.4" ;;
         aarch64)     AWG_PKG_SUFFIX="aarch64-3.10" ;;
@@ -79,6 +81,13 @@ detect_router() {
             return 1
             ;;
     esac
+    # Определяем реальный endianness из Entware
+    local entware_arch
+    entware_arch=$(ssh_exec "grep 'arch mipsel' /opt/etc/opkg.conf 2>/dev/null || grep 'arch aarch64' /opt/etc/opkg.conf 2>/dev/null" | head -1 | awk '{print $2}' || true)
+    if [[ -n "$entware_arch" ]]; then
+        AWG_PKG_SUFFIX="$entware_arch"
+        log "  Entware архитектура: $entware_arch"
+    fi
     log "  Пакеты: $AWG_PKG_SUFFIX"
 
     local INTERNAL_FREE_MB=$((INTERNAL_FREE_KB / 1024))
@@ -259,9 +268,11 @@ _install_entware_internal() {
 # --- Установка AWG-Go ---
 install_awg_go() {
     log "Проверка AWG-Go..."
-    if ssh_exec "opkg list-installed 2>/dev/null | grep amneziawg-go" | grep -q "amneziawg-go"; then
+    # Проверяем наличие бинарника (opkg может не видеть вручную установленные пакеты)
+    if ssh_exec "test -f /opt/bin/awg && test -f /opt/bin/amneziawg-go && echo yes" | grep -q "yes"; then
         local installed_ver
-        installed_ver=$(ssh_exec "opkg list-installed 2>/dev/null | grep amneziawg-go" | awk '{print $3}')
+        installed_ver=$(ssh_exec "opkg list-installed 2>/dev/null | grep amneziawg-go | awk '{print \$3}'" || echo "unknown")
+        installed_ver="${installed_ver:-unknown}"
         log "AWG-Go уже установлен (версия: $installed_ver)"
 
         # Проверить наличие обновлений
@@ -280,12 +291,12 @@ install_awg_go() {
 }
 
 _get_awg_arch_folder() {
-    # Определяет папку в GitLab по архитектуре
-    case "$ROUTER_ARCH" in
-        mips)    echo "mips_awg-go" ;;
-        mipsel)  echo "mipsel_awg-go" ;;
-        aarch64) echo "aarch64_awg-go" ;;
-        *)       echo "mipsel_awg-go" ;;  # fallback
+    # Определяет папку в GitLab по суффиксу пакетов
+    case "$AWG_PKG_SUFFIX" in
+        mipsel-3.4) echo "mipsel_awg-go" ;;
+        aarch64-3.10) echo "aarch64_awg-go" ;;
+        mips-3.4) echo "mips_awg-go" ;;
+        *) echo "mipsel_awg-go" ;;  # fallback
     esac
 }
 
