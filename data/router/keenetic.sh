@@ -114,9 +114,8 @@ setup_storage() {
             echo "  USB уже содержит данные. Варианты:"
             echo "   1) Использовать как есть (установить Entware на текущий раздел)"
             echo "   2) Отформатировать USB в ext4 (ВСЕ ДАННЫЕ БУДУТ УДАЛЕНЫ)"
-            echo "   3) Пропустить (установить на внутреннюю память, если хватит места)"
             echo ""
-            read -rp "  Выбор [1/2/3]: " STORAGE_CHOICE
+            read -rp "  Выбор [1/2]: " STORAGE_CHOICE
         else
             # USB есть, но не смонтирован — нужно форматировать
             log "  USB обнаружен ($usb_device), но не смонтирован"
@@ -209,34 +208,15 @@ _install_entware_usb() {
 }
 
 _install_entware_internal() {
-    # Проверить, поддерживает ли роутер установку на внутреннюю память
-    # Нужно минимум ~30MB свободного tmpfs (AWG-Go ~20MB + Entware ~10MB)
-    local min_required=30
-
-    if [[ $INTERNAL_FREE_MB -lt $min_required ]]; then
-        err "Недостаточно внутренней памяти (${INTERNAL_FREE_MB}MB свободно, нужно ${min_required}MB)"
-        err "Подключите USB-накопитель и запустите скрипт заново"
-        return 1
-    fi
-
-    warn "Установка на внутреннюю память — данные пропадут при перезагрузке!"
-    echo ""
-    read -rp "  Продолжить? (y/n): " INTERNAL_CONFIRM
-    if [[ "${INTERNAL_CONFIRM,,}" != "y" ]]; then
-        err "Прервано. Подключите USB для постоянной установки."
-        return 1
-    fi
-
-    log "Установка Entware на внутреннюю память..."
-    ndmc_exec "opkg initrc /opt/etc/init.d/rc.unslung"
-    sleep 3
-
-    if ssh_exec "test -f /opt/bin/opkg && echo yes" | grep -q "yes"; then
-        warn "Entware установлен на внутреннюю память (НЕ переживёт перезагрузку!)"
-    else
-        err "Не удалось установить Entware"
-        return 1
-    fi
+    # Keenetic поддерживает Entware только на USB.
+    # Внутренний NAND (/storage) используется системой и не подходит для opkg.
+    # Некоторые модели (Ultra KN-1811, Peak) имеют eMMC с достаточным местом,
+    # но KeeneticOS всё равно требует USB для Entware.
+    err "Keenetic требует USB-накопитель для установки Entware"
+    err "Внутренняя память (NAND/UBI) не подходит — используется системой"
+    err ""
+    err "Подключите USB-флешку (минимум 1GB) и запустите скрипт заново"
+    return 1
 }
 
 # --- Установка AWG-Go ---
