@@ -33,7 +33,7 @@
 - **Chat ID:** напиши [@userinfobot](https://t.me/userinfobot)
 - **Роутер (опционально):** Keenetic с USB-накопителем
 
-### 2. Запуск
+### 2. Настройка VPS
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main/setup.sh)
@@ -42,11 +42,28 @@ bash <(curl -sL https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main
 Скрипт спросит:
 1. **Bot Token** и **Chat ID**
 2. **Режим установки:** VLESS / AWG / оба
-3. **Настроить роутер?** — если да, автоматически подключится и настроит
 
-### 3. Готово
+После установки бот пришлёт сообщение в Telegram. Напиши `/start`.
 
-Бот пришлёт сообщение в Telegram. Напиши `/start`.
+### 3. Настройка роутера Keenetic (опционально)
+
+Запускается **на компьютере** (macOS / Linux / WSL), не на VPS:
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main/data/router/keenetic.sh)
+```
+
+Или с указанием конфига:
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main/data/router/keenetic.sh) /path/to/awg-router.conf
+```
+
+**Перед запуском:**
+1. В Telegram-боте: создай пользователя → добавь ключ **AWG Роутер**
+2. Сохрани `.conf` файл на компьютер
+3. Установи `sshpass`: `brew install sshpass` (macOS) или `apt install sshpass` (Linux)
+
+Скрипт сам определит модель роутера, установит Entware и AWG, настроит DNS и маршрутизацию.
 
 ## Telegram-бот
 

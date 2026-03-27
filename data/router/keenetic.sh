@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 # Автонастройка роутера Keenetic для AmneziaWG
-# Вызывается из setup.sh после установки AWG на сервере
+# Запускается локально на компьютере (macOS/Linux/WSL)
+#
+# Использование:
+#   bash keenetic.sh                          — спросит путь к конфигу
+#   bash keenetic.sh /path/to/awg-router.conf — с указанием конфига
+#   bash <(curl -sL URL/keenetic.sh)          — скачать и запустить
+#
+# Конфиг AWG-роутер создаётся в Telegram-боте: Пользователи → Добавить ключ → AWG Роутер
 
 set -uo pipefail
-# НЕ используем set -e — SSH-команды могут возвращать ненулевой код,
-# это не должно убивать весь скрипт
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Определяем директорию скрипта (для dns-lists)
+if [[ "${BASH_SOURCE[0]}" == *"bash"* || "${BASH_SOURCE[0]}" == "/dev/"* ]]; then
+    # Запущен через curl/pipe — скачаем dns-lists во временную папку
+    SCRIPT_DIR="/tmp/keenetic-setup"
+    mkdir -p "$SCRIPT_DIR"
+    DOWNLOADED_SCRIPT=true
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    DOWNLOADED_SCRIPT=false
+fi
 DNS_LISTS_DIR="$SCRIPT_DIR/dns-lists"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -605,16 +619,33 @@ setup_opkgtun() {
 setup_awg_config() {
     log "Загрузка конфига AWG..."
 
+    # Если конфиг не указан — спросить путь
     if [[ -z "$AWG_CLIENT_CONF" || ! -f "$AWG_CLIENT_CONF" ]]; then
-        err "Клиентский конфиг не найден: $AWG_CLIENT_CONF"
-        return 1
+        echo ""
+        log "Конфиг AWG для роутера не указан."
+        log "Создайте его в Telegram-боте: Пользователи → Добавить ключ → AWG Роутер"
+        log "Сохраните .conf файл и укажите путь:"
+        echo ""
+        read -rp "  Путь к .conf файлу: " AWG_CLIENT_CONF
+
+        if [[ -z "$AWG_CLIENT_CONF" || ! -f "$AWG_CLIENT_CONF" ]]; then
+            err "Файл не найден: $AWG_CLIENT_CONF"
+            return 1
+        fi
+    fi
+
+    # Извлечь IP клиента из конфига (если есть Address)
+    local conf_ip
+    conf_ip=$(grep "^Address" "$AWG_CLIENT_CONF" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
+    if [[ -n "$conf_ip" ]]; then
+        AWG_CLIENT_IP="$conf_ip"
     fi
 
     # Создать директорию и загрузить конфиг
     ssh_exec "mkdir -p /opt/etc/amnezia/amneziawg"
 
     # Передать конфиг через scp
-    sshpass -p "$ROUTER_PASS" scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -P "$ROUTER_PORT" "$AWG_CLIENT_CONF" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
+    sshpass -p "$ROUTER_ENTWARE_PASS" scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -P 222 "$AWG_CLIENT_CONF" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
     ssh_exec "chmod 600 /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
 
     # Скачать init.d скрипт
@@ -1110,11 +1141,49 @@ setup_dns_routes() {
     log "DNS-маршруты настроены для: ${services[*]}"
 }
 
+# --- Скачивание dns-lists (при запуске через curl) ---
+download_dns_lists() {
+    if [[ -d "$DNS_LISTS_DIR" ]] && ls "$DNS_LISTS_DIR"/*.lst &>/dev/null; then
+        return 0  # Уже есть
+    fi
+
+    local repo_url="https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main"
+    log "Скачиваю списки доменов..."
+    mkdir -p "$DNS_LISTS_DIR"
+    for svc in youtube instagram facebook telegram whatsapp twitter discord reddit spotify; do
+        curl -sL "${repo_url}/data/router/dns-lists/${svc}.lst" -o "$DNS_LISTS_DIR/${svc}.lst" 2>/dev/null
+    done
+    log "Списки загружены"
+}
+
 # --- Главная функция ---
 main() {
+    # Принять конфиг как аргумент
+    if [[ -n "${1:-}" && -f "${1:-}" ]]; then
+        AWG_CLIENT_CONF="$1"
+    fi
+
     log "=========================================="
-    log "  Настройка роутера Keenetic"
+    log "  Настройка роутера Keenetic для AmneziaWG"
     log "=========================================="
+    log ""
+    log "  Запускайте этот скрипт на компьютере (macOS/Linux/WSL)"
+    log "  Конфиг AWG создаётся в Telegram-боте → AWG Роутер"
+    log ""
+
+    # Проверить sshpass
+    if ! command -v sshpass &>/dev/null; then
+        err "sshpass не установлен"
+        echo ""
+        echo "  Установите:"
+        echo "    macOS:  brew install sshpass  (или brew install hudochenkov/sshpass/sshpass)"
+        echo "    Ubuntu: sudo apt install sshpass"
+        echo "    Arch:   sudo pacman -S sshpass"
+        return 1
+    fi
+
+    # Скачать dns-lists если нет
+    download_dns_lists
 
     check_connection || return 1
     detect_router || return 1
@@ -1126,6 +1195,11 @@ main() {
     setup_dns
     setup_dns_routes
     cleanup_after
+
+    # Очистка временных файлов при запуске через curl
+    if [[ "$DOWNLOADED_SCRIPT" == true ]]; then
+        rm -rf "$SCRIPT_DIR"
+    fi
 
     log "=========================================="
     log "  Роутер настроен!"

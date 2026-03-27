@@ -483,80 +483,15 @@ if ! awg show awg0 > /dev/null 2>&1; then
 fi
 log "AmneziaWG запущен на порту $AWG_PORT (UDP)"
 
-# --- Настройка роутера ---
+# --- Информация о настройке роутера ---
 
-echo ""
-read -rp "Настроить роутер Keenetic автоматически? (y/n): " SETUP_ROUTER
-if [[ "$(echo "$SETUP_ROUTER" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
-    # Проверка sshpass
-    if ! command -v sshpass &>/dev/null; then
-        apt install -y sshpass
-    fi
-
-    # Скрипт keenetic.sh сам запросит все данные для подключения
-    # (IP, пароль admin CLI, пароль Entware SSH)
-    # и определит доступные способы подключения
-
-    # Генерация клиентского конфига для роутера
-    ROUTER_AWG_IP="10.8.1.2"
-    ROUTER_PRIVKEY=$(awg genkey)
-    ROUTER_PUBKEY=$(echo "$ROUTER_PRIVKEY" | awg pubkey)
-    ROUTER_PSK=$(awg genpsk)
-
-    # Добавить peer в серверный конфиг
-    cat >> /etc/amneziawg/awg0.conf << PEER
-
-[Peer]
-# router
-PublicKey = $ROUTER_PUBKEY
-PresharedKey = $ROUTER_PSK
-AllowedIPs = $ROUTER_AWG_IP/32
-PEER
-
-    systemctl restart awg-quick@awg0
-
-    # Создать клиентский конфиг (OpkgTun — без Address/DNS)
-    AWG_ROUTER_CONF="/tmp/awg-router.conf"
-    cat > "$AWG_ROUTER_CONF" << RCONF
-[Interface]
-PrivateKey = $ROUTER_PRIVKEY
-Jc = $AWG_JC
-Jmin = $AWG_JMIN
-Jmax = $AWG_JMAX
-S1 = $AWG_S1
-S2 = $AWG_S2
-H1 = $AWG_H1
-H2 = $AWG_H2
-H3 = $AWG_H3
-H4 = $AWG_H4
-
-[Peer]
-PublicKey = $AWG_SERVER_PUBKEY
-PresharedKey = $ROUTER_PSK
-Endpoint = $SERVER_IP:$AWG_PORT
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-RCONF
-
-    # Запуск скрипта настройки роутера
-    ROUTER_SCRIPT="$SCRIPT_DIR/data/router/keenetic.sh"
-    if [[ ! -f "$ROUTER_SCRIPT" ]]; then
-        # Если запущен с сервера — скачать
-        ROUTER_SCRIPT="/tmp/keenetic.sh"
-        wget -qO "$ROUTER_SCRIPT" "${REPO_URL}/raw/main/data/router/keenetic.sh"
-        chmod +x "$ROUTER_SCRIPT"
-        # Скачать dns-lists
-        mkdir -p /tmp/dns-lists
-        for svc in youtube instagram facebook telegram whatsapp twitter discord reddit spotify; do
-            wget -qO "/tmp/dns-lists/${svc}.lst" "${REPO_URL}/raw/main/data/router/dns-lists/${svc}.lst"
-        done
-    fi
-
-    export AWG_CLIENT_IP="$ROUTER_AWG_IP" AWG_CLIENT_CONF="$AWG_ROUTER_CONF"
-    bash "$ROUTER_SCRIPT" || warn "Настройка роутера не завершена, но сервер работает"
-
-    rm -f "$AWG_ROUTER_CONF"
-fi
+log ""
+log "Для настройки роутера Keenetic:"
+log "  1. В Telegram-боте: создайте ключ 'AWG Роутер' для пользователя"
+log "  2. Сохраните .conf файл на компьютере"
+log "  3. Запустите на компьютере (macOS/Linux/WSL):"
+log "     bash <(curl -sL ${REPO_URL}/raw/main/data/router/keenetic.sh)"
+log ""
 
 fi  # end AWG
 
