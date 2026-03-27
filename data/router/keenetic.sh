@@ -608,6 +608,8 @@ setup_dns() {
         ["Google"]="8.8.8.8|dns.google"
         ["Quad9"]="9.9.9.9|dns.quad9.net"
         ["NextDNS"]="45.90.28.0|dns.nextdns.io"
+        ["Yandex"]="77.88.8.8|common.dot.dns.yandex.net"
+        ["Yandex Safe"]="77.88.8.88|safe.dot.dns.yandex.net"
     )
 
     # DNS-over-HTTPS серверы
@@ -616,6 +618,8 @@ setup_dns() {
         ["Cloudflare"]="https://cloudflare-dns.com/dns-query"
         ["Google"]="https://dns.google/dns-query"
         ["Quad9"]="https://dns.quad9.net:443/dns-query"
+        ["Yandex"]="https://common.dot.dns.yandex.net/dns-query"
+        ["Yandex Safe"]="https://safe.dot.dns.yandex.net/dns-query"
     )
 
     # Тестируем пинг до каждого DNS (с роутера)
@@ -744,6 +748,14 @@ setup_dns() {
         "NextDNS")
             ndmc_exec "dns-proxy tls upstream 45.90.28.0 sni dns.nextdns.io"
             ndmc_exec "dns-proxy tls upstream 45.90.30.0 sni dns.nextdns.io"
+            ;;
+        "Yandex")
+            ndmc_exec "dns-proxy tls upstream 77.88.8.8 sni common.dot.dns.yandex.net"
+            ndmc_exec "dns-proxy tls upstream 77.88.8.1 sni common.dot.dns.yandex.net"
+            ;;
+        "Yandex Safe")
+            ndmc_exec "dns-proxy tls upstream 77.88.8.88 sni safe.dot.dns.yandex.net"
+            ndmc_exec "dns-proxy tls upstream 77.88.8.2 sni safe.dot.dns.yandex.net"
             ;;
     esac
 
