@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Автонастройка роутера Keenetic для AmneziaWG
+# Автонастройка роутера Keenetic: VLESS (XKeen) + AmneziaWG
 # Запускается локально на компьютере (macOS/Linux/WSL)
 #
-# Использование:
-#   bash keenetic.sh                          — спросит путь к конфигу
-#   bash keenetic.sh /path/to/awg-router.conf — с указанием конфига
-#   bash <(curl -sL URL/keenetic.sh)          — скачать и запустить
+# Поддерживаемые протоколы:
+#   - VLESS через XKeen (xray + tproxy)
+#   - AmneziaWG нативный (ASC, KeeneticOS 4.2+)
+#   - AmneziaWG через AWG-Manager (Entware, веб-панель)
 #
-# Конфиг AWG-роутер создаётся в Telegram-боте: Пользователи → Добавить ключ → AWG Роутер
+# Использование:
+#   bash keenetic.sh                          — интерактивная настройка
+#   bash <(curl -sL URL/keenetic.sh)          — скачать и запустить
 
 set -uo pipefail
 
@@ -33,8 +35,8 @@ ROUTER_IP="${ROUTER_IP:-}"
 ROUTER_ADMIN_USER="${ROUTER_ADMIN_USER:-admin}"
 ROUTER_ADMIN_PASS="${ROUTER_ADMIN_PASS:-}"
 ROUTER_ENTWARE_PASS="${ROUTER_ENTWARE_PASS:-}"
-AWG_CLIENT_CONF="${AWG_CLIENT_CONF:-}"
-AWG_CLIENT_IP="${AWG_CLIENT_IP:-10.8.1.2}"
+# AWG конфиг (для нативного ASC — путь к .conf файлу)
+AWG_CONF_FILE="${AWG_CONF_FILE:-}"
 
 # Состояние подключения (определяется в check_connection)
 HAS_ENTWARE_SSH=false
@@ -681,6 +683,327 @@ setup_awg_config() {
     fi
 }
 
+# --- Установка XKeen (xray + tproxy) ---
+setup_xkeen() {
+    log "Проверка XKeen..."
+
+    if ! ssh_exec "test -f /opt/sbin/xkeen && echo yes" | grep -q "yes"; then
+        err "XKeen не установлен (/opt/sbin/xkeen не найден)"
+        err "Установите XKeen вручную: https://github.com/Jenya54/XKeen"
+        return 1
+    fi
+
+    local xkeen_ver
+    xkeen_ver=$(ssh_exec "xkeen -v 2>/dev/null" || echo "unknown")
+    log "XKeen найден ($xkeen_ver)"
+
+    # Зависимости
+    log "Проверка зависимостей XKeen..."
+    ssh_exec "opkg update 2>/dev/null"
+    for pkg in jq curl coreutils-uname coreutils-nohup; do
+        if ! ssh_exec "opkg list-installed | grep -q '^${pkg} '"; then
+            log "  Устанавливаю $pkg..."
+            ssh_exec "opkg install $pkg 2>&1"
+        fi
+    done
+
+    # xray-core
+    if ssh_exec "test -f /opt/sbin/xray && echo yes" | grep -q "yes"; then
+        local xray_ver
+        xray_ver=$(ssh_exec "/opt/sbin/xray version 2>/dev/null | head -1" || echo "unknown")
+        log "xray-core уже установлен ($xray_ver)"
+    else
+        log "Устанавливаю xray-core из Entware..."
+        ssh_exec "opkg install xray-core 2>&1"
+        if ! ssh_exec "test -f /opt/sbin/xray && echo yes" | grep -q "yes"; then
+            err "Не удалось установить xray-core"
+            return 1
+        fi
+        log "xray-core установлен"
+    fi
+
+    # Директории
+    log "Создаю директории XKeen..."
+    ssh_exec "mkdir -p /opt/etc/xray/configs /opt/etc/xray/dat /opt/var/log/xray /opt/etc/xkeen"
+
+    # Шаблоны конфигов (если директория пуста)
+    local configs_count
+    configs_count=$(ssh_exec "ls /opt/etc/xray/configs/*.json 2>/dev/null | wc -l" || echo "0")
+    configs_count=$(echo "$configs_count" | tr -d '[:space:]')
+
+    if [[ "$configs_count" == "0" ]]; then
+        log "Копирую шаблоны конфигов XKeen..."
+        local tpl_dir="/opt/sbin/.xkeen/02_install/08_install_configs/02_configs_dir"
+        for tpl in 01_log.json 03_inbounds.json 06_policy.json; do
+            if ssh_exec "test -f ${tpl_dir}/${tpl} && echo yes" | grep -q "yes"; then
+                ssh_exec "cp ${tpl_dir}/${tpl} /opt/etc/xray/configs/${tpl}"
+                log "  Скопирован $tpl"
+            else
+                warn "  Шаблон ${tpl} не найден в ${tpl_dir}"
+            fi
+        done
+    else
+        log "Конфиги XKeen уже существуют ($configs_count файлов)"
+    fi
+
+    # GeoSite/GeoIP базы (Re:filter)
+    if ! ssh_exec "test -f /opt/etc/xray/dat/geosite.dat && echo yes" | grep -q "yes"; then
+        log "Скачиваю GeoSite базу (Re:filter)..."
+        ssh_exec "curl -sL -o /opt/etc/xray/dat/geosite.dat https://github.com/nickspaargaren/no-google/releases/latest/download/geosite.dat 2>&1 || \
+            curl -sL -o /opt/etc/xray/dat/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat 2>&1"
+    fi
+    if ! ssh_exec "test -f /opt/etc/xray/dat/geoip.dat && echo yes" | grep -q "yes"; then
+        log "Скачиваю GeoIP базу..."
+        ssh_exec "curl -sL -o /opt/etc/xray/dat/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat 2>&1"
+    fi
+
+    # Init-скрипт S99xkeen
+    if ! ssh_exec "test -f /opt/etc/init.d/S99xkeen && echo yes" | grep -q "yes"; then
+        local init_tpl="/opt/sbin/.xkeen/02_install/07_install_register/04_register_init.sh"
+        if ssh_exec "test -f ${init_tpl} && echo yes" | grep -q "yes"; then
+            log "Копирую init-скрипт S99xkeen из шаблона..."
+            ssh_exec "cp ${init_tpl} /opt/etc/init.d/S99xkeen && chmod +x /opt/etc/init.d/S99xkeen"
+        else
+            warn "Шаблон init-скрипта не найден, S99xkeen не создан"
+        fi
+    else
+        log "S99xkeen уже существует"
+    fi
+
+    # Пользователь xkeen (uid/gid 11111)
+    if ! ssh_exec "id xkeen 2>/dev/null && echo yes" | grep -q "yes"; then
+        log "Создаю пользователя xkeen..."
+        ssh_exec "grep -q '^xkeen:' /opt/etc/group || echo 'xkeen:x:11111:' >> /opt/etc/group"
+        ssh_exec "grep -q '^xkeen:' /opt/etc/passwd || echo 'xkeen:x:11111:11111:XKeen:/opt/etc/xkeen:/bin/false' >> /opt/etc/passwd"
+    else
+        log "Пользователь xkeen уже существует"
+    fi
+
+    log "XKeen готов к настройке"
+}
+
+# --- Конфиг VLESS через XKeen (tproxy) ---
+setup_xkeen_vless_config() {
+    log "Настройка VLESS через XKeen..."
+
+    echo ""
+    echo "  Введите данные VLESS-подключения."
+    echo "  Можно вставить vless:// ссылку или ввести параметры вручную."
+    echo ""
+    read -rp "  vless:// ссылка (или Enter для ручного ввода): " VLESS_LINK
+
+    local VLESS_SERVER="" VLESS_PORT="" VLESS_UUID="" VLESS_PUBKEY="" VLESS_SHORT_ID="" VLESS_SNI=""
+
+    if [[ -n "$VLESS_LINK" && "$VLESS_LINK" == vless://* ]]; then
+        # Парсинг vless://UUID@SERVER:PORT?params#name
+        VLESS_UUID=$(echo "$VLESS_LINK" | sed 's|vless://||' | cut -d'@' -f1)
+        local server_part
+        server_part=$(echo "$VLESS_LINK" | sed 's|vless://[^@]*@||' | cut -d'#' -f1)
+        VLESS_SERVER=$(echo "$server_part" | cut -d':' -f1)
+        VLESS_PORT=$(echo "$server_part" | cut -d':' -f2 | cut -d'?' -f1)
+
+        local params
+        params=$(echo "$server_part" | grep -o '?.*' | sed 's/^?//')
+        VLESS_PUBKEY=$(echo "$params" | tr '&' '\n' | grep '^pbk=' | cut -d'=' -f2)
+        VLESS_SHORT_ID=$(echo "$params" | tr '&' '\n' | grep '^sid=' | cut -d'=' -f2)
+        VLESS_SNI=$(echo "$params" | tr '&' '\n' | grep '^sni=' | cut -d'=' -f2)
+
+        # Fallback для SNI
+        if [[ -z "$VLESS_SNI" ]]; then
+            VLESS_SNI=$(echo "$params" | tr '&' '\n' | grep '^host=' | cut -d'=' -f2)
+        fi
+
+        log "  Распознано из ссылки:"
+        log "    Сервер: $VLESS_SERVER:$VLESS_PORT"
+        log "    UUID: ${VLESS_UUID:0:8}..."
+        log "    SNI: $VLESS_SNI"
+    else
+        read -rp "  IP сервера: " VLESS_SERVER
+        read -rp "  Порт [443]: " VLESS_PORT
+        VLESS_PORT="${VLESS_PORT:-443}"
+        read -rp "  UUID: " VLESS_UUID
+        read -rp "  Public Key (Reality): " VLESS_PUBKEY
+        read -rp "  Short ID: " VLESS_SHORT_ID
+        read -rp "  SNI (например: www.google.com): " VLESS_SNI
+    fi
+
+    # Валидация
+    if [[ -z "$VLESS_SERVER" || -z "$VLESS_UUID" ]]; then
+        err "Не указаны обязательные параметры (сервер, UUID)"
+        return 1
+    fi
+    VLESS_PORT="${VLESS_PORT:-443}"
+    VLESS_SNI="${VLESS_SNI:-www.google.com}"
+
+    # Выбор сервисов для маршрутизации через xray
+    echo ""
+    log "Какие сервисы направить через VLESS?"
+    echo "   1) YouTube + Google"
+    echo "   2) Instagram"
+    echo "   3) Facebook"
+    echo "   4) Telegram"
+    echo "   5) WhatsApp"
+    echo "   6) Viber"
+    echo "   7) AI (Claude, ChatGPT)"
+    echo "   8) Все вышеперечисленные"
+    echo "   9) Весь трафик (всё через прокси)"
+    echo ""
+    echo "  Можно выбрать несколько через запятую (например: 1,2,4)"
+    read -rp "  Выбор [8]: " XKEEN_SERVICES
+    XKEEN_SERVICES="${XKEEN_SERVICES:-8}"
+
+    # Собираем массив geosite/domain правил
+    local route_domains=()
+    local all_traffic=false
+
+    if [[ "$XKEEN_SERVICES" == *"9"* ]]; then
+        all_traffic=true
+    elif [[ "$XKEEN_SERVICES" == *"8"* ]]; then
+        route_domains+=("geosite:youtube" "geosite:google" "geosite:instagram" "geosite:facebook" "geosite:meta" "geosite:telegram")
+        route_domains+=("domain:whatsapp.com" "domain:whatsapp.net" "domain:wa.me")
+        route_domains+=("domain:viber.com" "domain:viber.media" "domain:viber-cdn.com")
+        route_domains+=("domain:anthropic.com" "domain:claude.ai" "domain:openai.com" "domain:chatgpt.com")
+    else
+        IFS=',' read -ra selections <<< "$XKEEN_SERVICES"
+        for sel in "${selections[@]}"; do
+            sel=$(echo "$sel" | tr -d '[:space:]')
+            case "$sel" in
+                1) route_domains+=("geosite:youtube" "geosite:google") ;;
+                2) route_domains+=("geosite:instagram") ;;
+                3) route_domains+=("geosite:facebook" "geosite:meta") ;;
+                4) route_domains+=("geosite:telegram") ;;
+                5) route_domains+=("domain:whatsapp.com" "domain:whatsapp.net" "domain:wa.me") ;;
+                6) route_domains+=("domain:viber.com" "domain:viber.media" "domain:viber-cdn.com") ;;
+                7) route_domains+=("domain:anthropic.com" "domain:claude.ai" "domain:openai.com" "domain:chatgpt.com") ;;
+            esac
+        done
+    fi
+
+    # Генерируем 04_outbounds.json
+    log "Создаю конфиг outbounds (04_outbounds.json)..."
+
+    SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e ssh "${ENTWARE_SSH_ARGS[@]}" "cat > /opt/etc/xray/configs/04_outbounds.json" << OUTEOF
+{
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [{
+          "address": "$VLESS_SERVER",
+          "port": $VLESS_PORT,
+          "users": [{
+            "id": "$VLESS_UUID",
+            "encryption": "none",
+            "flow": "xtls-rprx-vision"
+          }]
+        }]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "fingerprint": "chrome",
+          "serverName": "$VLESS_SNI",
+          "publicKey": "$VLESS_PUBKEY",
+          "shortId": "$VLESS_SHORT_ID"
+        }
+      }
+    },
+    {"tag": "direct", "protocol": "freedom", "settings": {}},
+    {"tag": "block", "protocol": "blackhole", "settings": {}}
+  ]
+}
+OUTEOF
+
+    ssh_exec "chmod 600 /opt/etc/xray/configs/04_outbounds.json"
+
+    # Генерируем 05_routing.json
+    log "Создаю конфиг маршрутизации (05_routing.json)..."
+
+    if [[ "$all_traffic" == true ]]; then
+        # Весь трафик через прокси, кроме приватных сетей и IP сервера
+        SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e ssh "${ENTWARE_SSH_ARGS[@]}" "cat > /opt/etc/xray/configs/05_routing.json" << ROUTEEOF
+{
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "ip": ["$VLESS_SERVER"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "proxy"
+      }
+    ]
+  }
+}
+ROUTEEOF
+    else
+        # Формируем JSON-массив доменов для маршрутизации
+        local domains_json=""
+        for i in "${!route_domains[@]}"; do
+            if [[ $i -gt 0 ]]; then
+                domains_json+=","
+            fi
+            domains_json+="\"${route_domains[$i]}\""
+        done
+
+        SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e ssh "${ENTWARE_SSH_ARGS[@]}" "cat > /opt/etc/xray/configs/05_routing.json" << ROUTEEOF
+{
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "ip": ["$VLESS_SERVER"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "domain": [$domains_json],
+        "outboundTag": "proxy"
+      }
+    ]
+  }
+}
+ROUTEEOF
+    fi
+
+    ssh_exec "chmod 600 /opt/etc/xray/configs/05_routing.json"
+
+    # Запуск XKeen
+    log "Запускаю XKeen..."
+    ssh_exec "xkeen -start 2>&1" || true
+    sleep 3
+
+    # Проверка статуса
+    log "Проверяю статус XKeen..."
+    local xkeen_status
+    xkeen_status=$(ssh_exec "xkeen -status 2>&1" || true)
+    echo "$xkeen_status"
+
+    if echo "$xkeen_status" | grep -qi "running\|работает\|запущен\|active"; then
+        log "XKeen запущен и работает"
+    else
+        warn "XKeen запущен, но статус неясен — проверьте вручную: xkeen -status"
+    fi
+}
+
 # --- Очистка ДО установки (убрать конфликты) ---
 cleanup_before() {
     if [[ "$HAS_ENTWARE_SSH" == false ]]; then
@@ -689,6 +1012,38 @@ cleanup_before() {
     fi
     log "Проверка конфликтующих сервисов..."
     local cleaned=0
+
+    # 0. Старый xray/tun2socks (миграция на XKeen)
+    if ssh_exec "test -f /opt/etc/init.d/S51xray-tun && echo yes" | grep -q "yes"; then
+        warn "Найден старый S51xray-tun — останавливаю и удаляю"
+        ssh_exec "/opt/etc/init.d/S51xray-tun stop 2>/dev/null" || true
+        ssh_exec "rm -f /opt/etc/init.d/S51xray-tun"
+        cleaned=$((cleaned + 1))
+    fi
+
+    # 0a. Удаляем tun2socks (заменён на tproxy в XKeen)
+    if ssh_exec "test -f /opt/sbin/tun2socks && echo yes" | grep -q "yes"; then
+        warn "Найден tun2socks — удаляю (XKeen использует tproxy)"
+        ssh_exec "rm -f /opt/sbin/tun2socks"
+        cleaned=$((cleaned + 1))
+    fi
+
+    # 0b. Бэкап старого config.json (заменён на модульные конфиги XKeen)
+    if ssh_exec "test -f /opt/etc/xray/config.json && echo yes" | grep -q "yes"; then
+        warn "Найден старый config.json — делаю бэкап"
+        ssh_exec "mv /opt/etc/xray/config.json /opt/etc/xray/config.json.old 2>/dev/null"
+        cleaned=$((cleaned + 1))
+    fi
+
+    # 0c. Удаляем интерфейс OpkgTun1 (XKeen не использует tun-интерфейс)
+    if [[ "$HAS_ADMIN_CLI" == true ]]; then
+        if ndmc_exec "show interface OpkgTun1" 2>/dev/null | grep -q "interface-name: OpkgTun1"; then
+            warn "Найден OpkgTun1 — удаляю (XKeen использует tproxy)"
+            ndmc_exec "no interface OpkgTun1"
+            ndmc_exec "system configuration save"
+            cleaned=$((cleaned + 1))
+        fi
+    fi
 
     # 1. Старый AWG скрипт (S89amnezia-wg-quick) — заменён на S52awg-opkgtun0
     if ssh_exec "test -f /opt/etc/init.d/S89amnezia-wg-quick && echo yes" | grep -q "yes"; then
@@ -1087,7 +1442,12 @@ setup_dns_routes() {
     echo ""
     log "Настройка DNS-маршрутов для разблокировки"
     echo ""
-    echo "  Какие сервисы разблокировать через AWG?"
+
+    local VPN_INTERFACE="OpkgTun0"
+    log "Интерфейс для DNS-маршрутов: $VPN_INTERFACE (AWG-Go)"
+
+    echo ""
+    echo "  Какие сервисы разблокировать через ${VPN_INTERFACE}?"
     echo "   1) YouTube"
     echo "   2) Instagram"
     echo "   3) Facebook"
@@ -1095,7 +1455,8 @@ setup_dns_routes() {
     echo "   5) WhatsApp"
     echo "   6) Viber"
     echo "   7) Anthropic/Claude AI"
-    echo "   8) Все"
+    echo "   8) Custom (Hetzner и др.)"
+    echo "   9) Все"
     echo "   0) Пропустить"
     echo ""
     read -rp "  Введите номера через пробел (например: 1 2 4): " SELECTED
@@ -1114,11 +1475,12 @@ setup_dns_routes() {
         [5]="whatsapp"
         [6]="viber"
         [7]="anthropic"
+        [8]="custom"
     )
 
     local services=()
-    if [[ "$SELECTED" == "8" ]]; then
-        services=(youtube instagram facebook telegram whatsapp viber anthropic)
+    if [[ "$SELECTED" == "9" ]]; then
+        services=(youtube instagram facebook telegram whatsapp viber anthropic custom)
     else
         for num in $SELECTED; do
             if [[ -n "${SERVICE_MAP[$num]:-}" ]]; then
@@ -1147,7 +1509,7 @@ setup_dns_routes() {
         done < "$list_file"
 
         # Add DNS route
-        ndmc_exec "dns-proxy route object-group $group_name OpkgTun0 auto reject"
+        ndmc_exec "dns-proxy route object-group $group_name $VPN_INTERFACE auto reject"
     done
 
     ndmc_exec "system configuration save"
@@ -1163,7 +1525,7 @@ download_dns_lists() {
     local repo_url="https://raw.githubusercontent.com/ZveR1nMe/vps-xray-tg-auto/main"
     log "Скачиваю списки доменов..."
     mkdir -p "$DNS_LISTS_DIR"
-    for svc in youtube instagram facebook telegram whatsapp viber anthropic; do
+    for svc in youtube instagram facebook telegram whatsapp viber anthropic custom; do
         curl -sL "${repo_url}/data/router/dns-lists/${svc}.lst" -o "$DNS_LISTS_DIR/${svc}.lst" 2>/dev/null
     done
     log "Списки загружены"
@@ -1176,9 +1538,9 @@ main() {
         AWG_CLIENT_CONF="$1"
     fi
 
-    log "=========================================="
-    log "  Настройка роутера Keenetic для AmneziaWG"
-    log "=========================================="
+    log "=============================================="
+    log "  Настройка Keenetic: AmneziaWG + VLESS"
+    log "=============================================="
     log ""
     log "  Запускайте этот скрипт на компьютере (macOS/Linux/WSL)"
     log "  Конфиг AWG создаётся в Telegram-боте → AWG Роутер"
@@ -1202,11 +1564,36 @@ main() {
     detect_router || return 1
     cleanup_before
     setup_storage || return 1
-    install_awg_go || return 1
-    setup_opkgtun || return 1
-    setup_awg_config || return 1
+
+    # Выбор протоколов
+    echo ""
+    log "Какие протоколы настроить?"
+    echo "   1) Только AWG-Go"
+    echo "   2) Только VLESS (XKeen)"
+    echo "   3) Оба (AWG-Go + VLESS)"
+    echo ""
+    read -rp "  Выбор [3]: " PROTO_CHOICE
+    PROTO_CHOICE="${PROTO_CHOICE:-3}"
+
+    # AWG
+    if [[ "$PROTO_CHOICE" == "1" || "$PROTO_CHOICE" == "3" ]]; then
+        install_awg_go || return 1
+        setup_opkgtun || return 1
+        setup_awg_config || return 1
+    fi
+
+    # VLESS (XKeen)
+    if [[ "$PROTO_CHOICE" == "2" || "$PROTO_CHOICE" == "3" ]]; then
+        setup_xkeen || return 1
+        setup_xkeen_vless_config || return 1
+    fi
+
     setup_dns
-    setup_dns_routes
+
+    # DNS-маршруты только для AWG-Go (XKeen использует маршрутизацию xray)
+    if [[ "$PROTO_CHOICE" == "1" || "$PROTO_CHOICE" == "3" ]]; then
+        setup_dns_routes
+    fi
     cleanup_after
 
     # Очистка временных файлов при запуске через curl
