@@ -224,28 +224,6 @@ detect_router() {
     log "  Архитектура: $ROUTER_ARCH"
     log "  RAM: ${ROUTER_RAM_MB} MB"
 
-    # Определение суффикса пакетов
-    # uname -m на Keenetic возвращает "mips" даже для mipsel (little-endian)
-    # Entware всегда mipsel на MT7621/MT7628
-    case "$ROUTER_ARCH" in
-        mips|mipsel) AWG_PKG_SUFFIX="mipsel-3.4" ;;
-        aarch64)     AWG_PKG_SUFFIX="aarch64-3.10" ;;
-        *)
-            err "Неподдерживаемая архитектура: $ROUTER_ARCH"
-            return 1
-            ;;
-    esac
-    # Определяем реальный endianness из Entware (только если Entware SSH доступен)
-    if [[ "$HAS_ENTWARE_SSH" == true ]]; then
-        local entware_arch
-        entware_arch=$(ssh_exec "grep 'arch mipsel' /opt/etc/opkg.conf 2>/dev/null || grep 'arch aarch64' /opt/etc/opkg.conf 2>/dev/null" | head -1 | awk '{print $2}' || true)
-        if [[ -n "$entware_arch" ]]; then
-            AWG_PKG_SUFFIX="$entware_arch"
-            log "  Entware архитектура: $entware_arch"
-        fi
-    fi
-    log "  Пакеты: $AWG_PKG_SUFFIX"
-
     local INTERNAL_FREE_MB=$((INTERNAL_FREE_KB / 1024))
     log "  Внутренняя память (tmpfs): ${INTERNAL_FREE_MB} MB свободно"
 }
