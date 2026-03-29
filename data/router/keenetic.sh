@@ -1555,16 +1555,12 @@ download_dns_lists() {
 main() {
     # Принять конфиг как аргумент
     if [[ -n "${1:-}" && -f "${1:-}" ]]; then
-        AWG_CLIENT_CONF="$1"
+        AWG_CONF_FILE="$1"
     fi
 
     log "=============================================="
-    log "  Настройка Keenetic: AmneziaWG + VLESS"
+    log "  Настройка Keenetic: VLESS + AmneziaWG"
     log "=============================================="
-    log ""
-    log "  Запускайте этот скрипт на компьютере (macOS/Linux/WSL)"
-    log "  Конфиг AWG создаётся в Telegram-боте → AWG Роутер"
-    log ""
 
     # Проверить sshpass
     if ! command -v sshpass &>/dev/null; then
@@ -1587,33 +1583,53 @@ main() {
 
     # Выбор протоколов
     echo ""
-    log "Какие протоколы настроить?"
-    echo "   1) Только AWG-Go"
-    echo "   2) Только VLESS (XKeen)"
-    echo "   3) Оба (AWG-Go + VLESS)"
+    log "Какой протокол настроить?"
+    echo "   1) VLESS (XKeen)                — TCP, обход DPI"
+    echo "   2) AmneziaWG нативный (ASC)     — UDP, KeeneticOS 4.2+"
+    echo "   3) AWG-Manager (Entware)         — UDP, веб-панель"
+    echo "   4) VLESS + AWG нативный"
+    echo "   5) VLESS + AWG-Manager"
     echo ""
-    read -rp "  Выбор [3]: " PROTO_CHOICE
-    PROTO_CHOICE="${PROTO_CHOICE:-3}"
+    read -rp "  Выбор [1]: " PROTO_CHOICE
+    PROTO_CHOICE="${PROTO_CHOICE:-1}"
 
-    # AWG
-    if [[ "$PROTO_CHOICE" == "1" || "$PROTO_CHOICE" == "3" ]]; then
-        install_awg_go || return 1
-        setup_opkgtun || return 1
-        setup_awg_config || return 1
-    fi
+    case "$PROTO_CHOICE" in
+        1)
+            setup_xkeen || return 1
+            setup_xkeen_vless_config || return 1
+            ;;
+        2)
+            setup_native_awg || return 1
+            ;;
+        3)
+            setup_awg_manager || return 1
+            ;;
+        4)
+            setup_xkeen || return 1
+            setup_xkeen_vless_config || return 1
+            setup_native_awg || return 1
+            ;;
+        5)
+            setup_xkeen || return 1
+            setup_xkeen_vless_config || return 1
+            setup_awg_manager || return 1
+            ;;
+        *)
+            err "Неверный выбор: $PROTO_CHOICE"
+            return 1
+            ;;
+    esac
 
-    # VLESS (XKeen)
-    if [[ "$PROTO_CHOICE" == "2" || "$PROTO_CHOICE" == "3" ]]; then
-        setup_xkeen || return 1
-        setup_xkeen_vless_config || return 1
-    fi
-
+    # DNS
     setup_dns
 
-    # DNS-маршруты только для AWG-Go (XKeen использует маршрутизацию xray)
-    if [[ "$PROTO_CHOICE" == "1" || "$PROTO_CHOICE" == "3" ]]; then
+    # DNS-маршруты для AWG (XKeen использует маршрутизацию xray)
+    if [[ "$PROTO_CHOICE" == "2" || "$PROTO_CHOICE" == "4" ]]; then
         setup_dns_routes
+    elif [[ "$PROTO_CHOICE" == "3" || "$PROTO_CHOICE" == "5" ]]; then
+        log "DNS-маршруты для AWG-Manager настраиваются через веб-панель: http://$ROUTER_IP:2222"
     fi
+
     cleanup_after
 
     # Очистка временных файлов при запуске через curl
@@ -1624,6 +1640,13 @@ main() {
     log "=========================================="
     log "  Роутер настроен!"
     log "=========================================="
+
+    # Подсказки
+    case "$PROTO_CHOICE" in
+        1)     log "  VLESS: проверьте xkeen -status" ;;
+        2|4)   log "  AWG: проверьте в Keenetic → Другие подключения → WireGuard" ;;
+        3|5)   log "  AWG-Manager: http://$ROUTER_IP:2222" ;;
+    esac
 }
 
 main "$@"
