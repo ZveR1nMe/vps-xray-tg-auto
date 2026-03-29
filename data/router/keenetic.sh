@@ -464,223 +464,168 @@ _install_entware_internal() {
     return 1
 }
 
-# --- Установка AWG-Go ---
-install_awg_go() {
-    log "Проверка AWG-Go..."
-    # Проверяем наличие бинарника (opkg может не видеть вручную установленные пакеты)
-    if ssh_exec "test -f /opt/bin/awg && test -f /opt/bin/amneziawg-go && echo yes" | grep -q "yes"; then
-        local installed_ver
-        installed_ver=$(ssh_exec "opkg list-installed 2>/dev/null | grep amneziawg-go | awk '{print \$3}'" || echo "unknown")
-        installed_ver="${installed_ver:-unknown}"
-        log "AWG-Go уже установлен (версия: $installed_ver)"
-
-        # Проверить наличие обновлений
-        _check_awg_updates "$installed_ver"
-        return 0
-    fi
-
-    # AWG_PKG_SUFFIX определяется в detect_router()
-    if [[ -z "${AWG_PKG_SUFFIX:-}" ]]; then
-        err "Архитектура не определена (detect_router не был вызван)"
+# --- Проверка поддержки нативного AWG (ASC) ---
+check_native_awg_support() {
+    if [[ "$HAS_ADMIN_CLI" != true ]]; then
+        err "Нужен Admin CLI для нативного AWG"
         return 1
     fi
 
-    _download_latest_awg
-    _install_awg_packages
-}
+    # Проверяем версию KeeneticOS (нужна 4.2+)
+    local os_ver
+    os_ver=$(ndmc_exec "show version" | grep "release:" | awk '{print $2}' | head -1)
 
-_get_awg_arch_folder() {
-    # Определяет папку в GitLab по суффиксу пакетов
-    case "$AWG_PKG_SUFFIX" in
-        mipsel-3.4) echo "mipsel_awg-go" ;;
-        aarch64-3.10) echo "aarch64_awg-go" ;;
-        mips-3.4) echo "mips_awg-go" ;;
-        *) echo "mipsel_awg-go" ;;  # fallback
-    esac
-}
-
-_download_latest_awg() {
-    local arch_folder
-    arch_folder=$(_get_awg_arch_folder)
-
-    local gitlab_api="https://gitlab.com/api/v4/projects/ShidlaSGC%2Fkeenetic-entware-awg-go/repository/tree"
-    local gitlab_raw="https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main"
-
-    log "Поиск последних версий AWG-Go для $ROUTER_ARCH..."
-
-    # Получить список файлов из GitLab API
-    local file_list
-    file_list=$(curl -s "${gitlab_api}?path=blob/01__Entware_AWG-Go_Install/${arch_folder}&per_page=50" 2>/dev/null)
-
-    if [[ -z "$file_list" || "$file_list" == "[]" ]]; then
-        warn "Не удалось получить список из GitLab API, использую прямые ссылки"
-        _download_awg_fallback
-        return
-    fi
-
-    # Извлечь имена файлов .ipk
-    local tools_file
-    tools_file=$(echo "$file_list" | grep -o '"name":"amneziawg-tools[^"]*\.ipk"' | head -1 | cut -d'"' -f4)
-    local go_file
-    go_file=$(echo "$file_list" | grep -o '"name":"amneziawg-go[^"]*\.ipk"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$tools_file" || -z "$go_file" ]]; then
-        warn "Не удалось определить файлы пакетов, использую fallback"
-        _download_awg_fallback
-        return
-    fi
-
-    log "  amneziawg-tools: $tools_file"
-    log "  amneziawg-go: $go_file"
-
-    local download_path="blob/01__Entware_AWG-Go_Install/${arch_folder}"
-
-    ssh_exec "mkdir -p /opt/root/awg2-go && cd /opt/root/awg2-go && \
-        rm -f *.ipk && \
-        curl -sLOf '${gitlab_raw}/${download_path}/${tools_file}' && \
-        curl -sLOf '${gitlab_raw}/${download_path}/${go_file}'"
-
-    log "Пакеты скачаны (последние версии)"
-}
-
-_download_awg_fallback() {
-    # Fallback — попробовать скачать с захардкоженными именами
-    local gitlab_raw="https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main/blob/01__Entware_AWG-Go_Install"
-    local arch_folder
-    arch_folder=$(_get_awg_arch_folder)
-
-    warn "Пробую скачать с fallback URL..."
-    ssh_exec "mkdir -p /opt/root/awg2-go && cd /opt/root/awg2-go && \
-        rm -f *.ipk && \
-        curl -sLOf '${gitlab_raw}/${arch_folder}/amneziawg-tools_1.0.20250903-2_${AWG_PKG_SUFFIX}.ipk' && \
-        curl -sLOf '${gitlab_raw}/${arch_folder}/amneziawg-go_v0.2.16-1_${AWG_PKG_SUFFIX}.ipk'"
-}
-
-_install_awg_packages() {
-    log "Устанавливаю AWG-Go..."
-    ssh_exec "opkg update 2>/dev/null; \
-        opkg install /opt/root/awg2-go/amneziawg-tools*.ipk 2>&1; \
-        opkg install /opt/root/awg2-go/amneziawg-go*.ipk 2>&1"
-
-    if ssh_exec "which awg" | grep -q "awg"; then
-        log "AWG-Go установлен"
-    else
-        err "Не удалось установить AWG-Go"
-        return 1
-    fi
-}
-
-_check_awg_updates() {
-    local current_ver="${1:-}"
-    local arch_folder
-    arch_folder=$(_get_awg_arch_folder)
-
-    local gitlab_api="https://gitlab.com/api/v4/projects/ShidlaSGC%2Fkeenetic-entware-awg-go/repository/tree"
-    local file_list
-    file_list=$(curl -s "${gitlab_api}?path=blob/01__Entware_AWG-Go_Install/${arch_folder}&per_page=50" 2>/dev/null)
-
-    if [[ -z "$file_list" || "$file_list" == "[]" ]]; then
+    if [[ -z "$os_ver" ]]; then
+        warn "Не удалось определить версию KeeneticOS"
         return 0
     fi
 
-    local latest_go
-    latest_go=$(echo "$file_list" | grep -o '"name":"amneziawg-go[^"]*\.ipk"' | head -1 | cut -d'"' -f4)
+    local major minor
+    major=$(echo "$os_ver" | cut -d. -f1)
+    minor=$(echo "$os_ver" | cut -d. -f2)
 
-    if [[ -n "$latest_go" ]]; then
-        # Извлечь версию из имени файла (amneziawg-go_v0.2.16-1_xxx.ipk → v0.2.16-1)
-        local latest_ver
-        latest_ver=$(echo "$latest_go" | sed 's/amneziawg-go_\([^_]*\)_.*/\1/')
+    if [[ "$major" -lt 4 ]] || { [[ "$major" -eq 4 ]] && [[ "$minor" -lt 2 ]]; }; then
+        err "Нативный AWG требует KeeneticOS 4.2+ (установлена: $os_ver)"
+        err "Используйте AWG-Manager (Entware) вместо нативного"
+        return 1
+    fi
 
-        if [[ "$latest_ver" != "$current_ver" && "$latest_ver" != "v$current_ver" ]]; then
-            warn "Доступна новая версия AWG-Go: $latest_ver (установлена: $current_ver)"
-            echo ""
-            read -rp "  Обновить? (y/n): " UPDATE_AWG
-            if [[ "$(echo "$UPDATE_AWG" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
-                _download_latest_awg
-                _install_awg_packages
-            fi
-        else
-            log "AWG-Go актуальная версия"
-        fi
+    # Проверяем компонент WireGuard
+    local wg_component
+    wg_component=$(ndmc_exec "show components" | grep -i wireguard || true)
+    if [[ -z "$wg_component" ]]; then
+        warn "Компонент WireGuard не установлен в KeeneticOS"
+        echo "  Установите: Настройки → Обновление → Компоненты → WireGuard VPN"
+        return 1
+    fi
+
+    log "KeeneticOS $os_ver — поддержка ASC подтверждена"
+}
+
+# --- Парсинг AWG .conf файла ---
+parse_awg_conf() {
+    local conf_file="$1"
+
+    if [[ ! -f "$conf_file" ]]; then
+        err "Файл не найден: $conf_file"
+        return 1
+    fi
+
+    # Извлечь параметры из [Interface]
+    AWG_PRIVATE_KEY=$(awk -F' *= *' '/^PrivateKey/{print $2}' "$conf_file")
+    AWG_ADDRESS=$(awk -F' *= *' '/^Address/{print $2}' "$conf_file")
+    AWG_DNS=$(awk -F' *= *' '/^DNS/{print $2}' "$conf_file")
+
+    # ASC параметры
+    AWG_JC=$(awk -F' *= *' '/^Jc/{print $2}' "$conf_file")
+    AWG_JMIN=$(awk -F' *= *' '/^Jmin/{print $2}' "$conf_file")
+    AWG_JMAX=$(awk -F' *= *' '/^Jmax/{print $2}' "$conf_file")
+    AWG_S1=$(awk -F' *= *' '/^S1/{print $2}' "$conf_file")
+    AWG_S2=$(awk -F' *= *' '/^S2/{print $2}' "$conf_file")
+    AWG_H1=$(awk -F' *= *' '/^H1/{print $2}' "$conf_file")
+    AWG_H2=$(awk -F' *= *' '/^H2/{print $2}' "$conf_file")
+    AWG_H3=$(awk -F' *= *' '/^H3/{print $2}' "$conf_file")
+    AWG_H4=$(awk -F' *= *' '/^H4/{print $2}' "$conf_file")
+
+    # Извлечь параметры из [Peer]
+    AWG_PEER_KEY=$(awk -F' *= *' '/^PublicKey/{print $2}' "$conf_file")
+    AWG_PEER_PSK=$(awk -F' *= *' '/^PresharedKey/{print $2}' "$conf_file")
+    AWG_ENDPOINT=$(awk -F' *= *' '/^Endpoint/{print $2}' "$conf_file")
+    AWG_ALLOWED_IPS=$(awk -F' *= *' '/^AllowedIPs/{print $2}' "$conf_file")
+    AWG_KEEPALIVE=$(awk -F' *= *' '/^PersistentKeepalive/{print $2}' "$conf_file")
+
+    AWG_ENDPOINT_HOST="${AWG_ENDPOINT%%:*}"
+    AWG_ENDPOINT_PORT="${AWG_ENDPOINT##*:}"
+
+    log "Конфиг распарсен:"
+    log "  Адрес: $AWG_ADDRESS"
+    log "  Сервер: $AWG_ENDPOINT"
+    if [[ -n "$AWG_JC" ]]; then
+        log "  ASC: Jc=$AWG_JC Jmin=$AWG_JMIN Jmax=$AWG_JMAX"
     fi
 }
 
-# --- Настройка OpkgTun0 ---
-setup_opkgtun() {
-    log "Настройка OpkgTun0..."
+# --- Настройка нативного AmneziaWG (ASC) ---
+setup_native_awg() {
+    log "Настройка нативного AmneziaWG (ASC)..."
 
-    # Проверка существования
-    if ndmc_exec "show interface OpkgTun0" | grep -q "interface-name: OpkgTun0"; then
-        log "OpkgTun0 уже существует"
-    else
-        log "Создаю интерфейс OpkgTun0..."
-        ndmc_exec "interface OpkgTun0"
-        ndmc_exec "interface OpkgTun0 description AWG-Go"
-        ndmc_exec "interface OpkgTun0 ip global auto"
-    fi
+    check_native_awg_support || return 1
 
-    ndmc_exec "interface OpkgTun0 ip address $AWG_CLIENT_IP 255.255.255.255"
-    # MTU: 1500 - 60(WG overhead) - 100(AWG obfuscation + запас) = 1340
-    ndmc_exec "interface OpkgTun0 ip mtu 1340"
-    ndmc_exec "interface OpkgTun0 ip tcp adjust-mss pmtu"
-    ndmc_exec "interface OpkgTun0 up"
-    ndmc_exec "system configuration save"
-
-    log "OpkgTun0 настроен (IP: $AWG_CLIENT_IP)"
-}
-
-# --- Конфиг и автозапуск ---
-setup_awg_config() {
-    log "Загрузка конфига AWG..."
-
-    # Если конфиг не указан — спросить путь
-    if [[ -z "$AWG_CLIENT_CONF" || ! -f "$AWG_CLIENT_CONF" ]]; then
+    # Запросить .conf файл
+    if [[ -z "$AWG_CONF_FILE" || ! -f "$AWG_CONF_FILE" ]]; then
         echo ""
-        log "Конфиг AWG для роутера не указан."
-        log "Создайте его в Telegram-боте: Пользователи → Добавить ключ → AWG Роутер"
-        log "Сохраните .conf файл и укажите путь:"
+        log "Укажите путь к конфигу AmneziaWG (.conf)"
+        log "Создайте в Telegram-боте: Пользователи → Добавить ключ → AWG Роутер"
         echo ""
-        read -rp "  Путь к .conf файлу: " AWG_CLIENT_CONF
+        read -rp "  Путь к .conf файлу: " AWG_CONF_FILE
 
-        if [[ -z "$AWG_CLIENT_CONF" || ! -f "$AWG_CLIENT_CONF" ]]; then
-            err "Файл не найден: $AWG_CLIENT_CONF"
+        if [[ -z "$AWG_CONF_FILE" || ! -f "$AWG_CONF_FILE" ]]; then
+            err "Файл не найден: $AWG_CONF_FILE"
             return 1
         fi
     fi
 
-    # Извлечь IP клиента из конфига (если есть Address)
-    local conf_ip
-    conf_ip=$(grep "^Address" "$AWG_CLIENT_CONF" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
-    if [[ -n "$conf_ip" ]]; then
-        AWG_CLIENT_IP="$conf_ip"
+    parse_awg_conf "$AWG_CONF_FILE" || return 1
+
+    # Определить имя интерфейса (Wireguard1 если Wireguard0 занят)
+    local wg_iface="Wireguard0"
+    if ndmc_exec "show interface Wireguard0" 2>/dev/null | grep -q "interface-name:"; then
+        wg_iface="Wireguard1"
+        log "Wireguard0 занят, использую $wg_iface"
     fi
 
-    # Создать директорию и загрузить конфиг
-    ssh_exec "mkdir -p /opt/etc/amnezia/amneziawg"
+    log "Создаю интерфейс $wg_iface..."
 
-    # Передать конфиг через scp
-    SSHPASS="$ROUTER_ENTWARE_PASS" sshpass -e scp -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -P 222 "$AWG_CLIENT_CONF" "root@$ROUTER_IP:/opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
-    ssh_exec "chmod 600 /opt/etc/amnezia/amneziawg/awg0-opkgtun0.conf"
+    # Создать WireGuard интерфейс
+    ndmc_exec "interface $wg_iface"
+    ndmc_exec "interface $wg_iface description AmneziaWG"
+    ndmc_exec "interface $wg_iface wireguard private-key $AWG_PRIVATE_KEY"
 
-    # Скачать init.d скрипт
-    log "Скачиваю скрипт запуска..."
-    ssh_exec "cd /opt/etc/init.d/ && \
-        curl -sLOf 'https://gitlab.com/ShidlaSGC/keenetic-entware-awg-go/-/raw/main/blob/02__KeenOS_5.0_(OpkgTun)/S52awg-opkgtun0' && \
-        chmod +x S52awg-opkgtun0"
-
-    # Запуск
-    log "Запускаю AWG..."
-    ssh_exec "/opt/etc/init.d/S52awg-opkgtun0 restart 2>&1" || true
-    sleep 3
-
-    # Проверка
-    local status
-    status=$(ssh_exec "awg show 2>&1")
-    if echo "$status" | grep -q "latest handshake"; then
-        log "AWG подключён, handshake OK"
-    else
-        warn "AWG запущен, но handshake ещё не прошёл (может нужно подождать)"
+    # Установить ASC параметры
+    if [[ -n "$AWG_JC" ]]; then
+        log "  Устанавливаю ASC параметры..."
+        ndmc_exec "interface $wg_iface wireguard asc $AWG_JC $AWG_JMIN $AWG_JMAX $AWG_S1 $AWG_S2 $AWG_H1 $AWG_H2 $AWG_H3 $AWG_H4"
     fi
+
+    # Установить IP адрес
+    local ip_addr="${AWG_ADDRESS%%/*}"
+    local ip_mask="${AWG_ADDRESS##*/}"
+    case "$ip_mask" in
+        32) ip_mask="255.255.255.255" ;;
+        24) ip_mask="255.255.255.0" ;;
+        16) ip_mask="255.255.0.0" ;;
+        *)  ip_mask="255.255.255.0" ;;
+    esac
+    ndmc_exec "interface $wg_iface ip address $ip_addr $ip_mask"
+    ndmc_exec "interface $wg_iface ip mtu 1340"
+    ndmc_exec "interface $wg_iface ip tcp adjust-mss pmtu"
+
+    # Добавить пир
+    log "  Добавляю пир ($AWG_ENDPOINT_HOST)..."
+    ndmc_exec "interface $wg_iface wireguard peer $AWG_PEER_KEY"
+    ndmc_exec "interface $wg_iface wireguard peer $AWG_PEER_KEY endpoint $AWG_ENDPOINT_HOST $AWG_ENDPOINT_PORT"
+    ndmc_exec "interface $wg_iface wireguard peer $AWG_PEER_KEY keepalive ${AWG_KEEPALIVE:-25}"
+
+    # PresharedKey
+    if [[ -n "$AWG_PEER_PSK" ]]; then
+        ndmc_exec "interface $wg_iface wireguard peer $AWG_PEER_KEY preshared-key $AWG_PEER_PSK"
+    fi
+
+    # AllowedIPs
+    IFS=',' read -ra allowed_ips <<< "$AWG_ALLOWED_IPS"
+    for aip in "${allowed_ips[@]}"; do
+        aip=$(echo "$aip" | tr -d ' ')
+        ndmc_exec "interface $wg_iface wireguard peer $AWG_PEER_KEY allow $aip"
+    done
+
+    # Включить интерфейс
+    ndmc_exec "interface $wg_iface up"
+    ndmc_exec "system configuration save"
+
+    log "$wg_iface настроен и запущен"
+
+    # Сохранить имя интерфейса для DNS-маршрутов
+    AWG_INTERFACE="$wg_iface"
 }
 
 # --- Установка XKeen (xray + tproxy) ---
