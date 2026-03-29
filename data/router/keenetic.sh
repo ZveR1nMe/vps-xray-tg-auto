@@ -1137,13 +1137,14 @@ cleanup_before() {
     dup_count=$(ssh_exec "grep -c 'src/gz entware' /opt/etc/opkg.conf 2>/dev/null" || echo "0")
     if [[ "$dup_count" -gt 1 ]]; then
         warn "Дубликаты в opkg.conf ($dup_count записей entware) — исправляю"
-        # Определить правильный URL для архитектуры на основе AWG_PKG_SUFFIX
+        # Определить правильный URL для архитектуры
         local entware_url
-        local arch_name="${AWG_PKG_SUFFIX:-mipsel-3.4}"
+        local arch_name
+        arch_name=$(ssh_exec "opkg print-architecture 2>/dev/null | grep -vE 'all|_kn' | awk '{print \$2}' | head -1" || echo "mipsel-3.4")
         case "$arch_name" in
             aarch64-3.10) entware_url="http://bin.entware.net/aarch64-k3.10" ;;
             mips-3.4)     entware_url="http://bin.entware.net/mipssf-k3.4" ;;
-            *)             entware_url="http://bin.entware.net/mipselsf-k3.4" ;;
+            *)            entware_url="http://bin.entware.net/mipselsf-k3.4" ;;
         esac
         ssh_exec "cat > /opt/etc/opkg.conf << OPKG
 src/gz entware ${entware_url}
@@ -1184,16 +1185,7 @@ cleanup_after() {
     log "Очистка временных файлов..."
     local freed=0
 
-    # 1. Установочные .ipk файлы
-    if ssh_exec "test -d /opt/root/awg2-go && echo yes" | grep -q "yes"; then
-        local ipk_size
-        ipk_size=$(ssh_exec "du -sk /opt/root/awg2-go/ 2>/dev/null | awk '{print \$1}'" || echo "0")
-        ssh_exec "rm -rf /opt/root/awg2-go"
-        log "  Удалены .ipk пакеты (${ipk_size}KB)"
-        freed=$((freed + ipk_size))
-    fi
-
-    # 2. opkg кэш
+    # 1. opkg кэш
     if ssh_exec "test -d /opt/var/opkg-lists && echo yes" | grep -q "yes"; then
         local cache_size
         cache_size=$(ssh_exec "du -sk /opt/var/opkg-lists/ 2>/dev/null | awk '{print \$1}'" || echo "0")
