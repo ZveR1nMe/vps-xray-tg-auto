@@ -454,8 +454,8 @@ check_native_awg_support() {
     os_ver=$(ndmc_exec "show version" | grep "release:" | awk '{print $2}' | head -1)
 
     if [[ -z "$os_ver" ]]; then
-        warn "Не удалось определить версию KeeneticOS"
-        return 0
+        warn "Не удалось определить версию KeeneticOS — проверьте вручную (нужна 4.2+)"
+        return 1
     fi
 
     local major minor
@@ -570,9 +570,12 @@ setup_native_awg() {
     local ip_mask="${AWG_ADDRESS##*/}"
     case "$ip_mask" in
         32) ip_mask="255.255.255.255" ;;
+        30) ip_mask="255.255.255.252" ;;
+        28) ip_mask="255.255.255.240" ;;
         24) ip_mask="255.255.255.0" ;;
         16) ip_mask="255.255.0.0" ;;
-        *)  ip_mask="255.255.255.0" ;;
+        *)  warn "Нестандартная маска /$ip_mask — использую /24"
+            ip_mask="255.255.255.0" ;;
     esac
     ndmc_exec "interface $wg_iface ip address $ip_addr $ip_mask"
     ndmc_exec "interface $wg_iface ip mtu 1340"
