@@ -628,6 +628,58 @@ setup_native_awg() {
     AWG_INTERFACE="$wg_iface"
 }
 
+# --- Установка AWG-Manager (Entware) ---
+setup_awg_manager() {
+    log "Установка AWG-Manager..."
+
+    if [[ "$HAS_ENTWARE_SSH" != true ]]; then
+        err "AWG-Manager требует Entware (SSH доступ не настроен)"
+        return 1
+    fi
+
+    # Проверить, установлен ли уже
+    if ssh_exec "test -f /opt/bin/awg-manager && echo yes" | grep -q "yes"; then
+        local installed_ver
+        installed_ver=$(ssh_exec "/opt/bin/awg-manager --version 2>/dev/null" || echo "unknown")
+        log "AWG-Manager уже установлен ($installed_ver)"
+
+        echo ""
+        read -rp "  Переустановить/обновить? (y/n) [n]: " REINSTALL
+        if [[ "$(echo "${REINSTALL:-n}" | tr '[:upper:]' '[:lower:]')" != "y" ]]; then
+            _awg_manager_status
+            return 0
+        fi
+    fi
+
+    # Установка через официальный скрипт
+    log "Скачиваю и устанавливаю AWG-Manager..."
+    ssh_exec "opkg update 2>/dev/null; opkg install curl 2>/dev/null"
+    ssh_exec "curl -sL https://raw.githubusercontent.com/hoaxisr/awg-manager/main/scripts/install.sh | sh" || {
+        err "Не удалось установить AWG-Manager"
+        return 1
+    }
+
+    _awg_manager_status
+}
+
+_awg_manager_status() {
+    # Запуск и проверка
+    ssh_exec "/opt/etc/init.d/S99awg-manager restart 2>/dev/null" || true
+    sleep 2
+
+    local health
+    health=$(ssh_exec "curl -s http://127.0.0.1:2222/api/health 2>/dev/null" || true)
+
+    if [[ -n "$health" ]]; then
+        log "AWG-Manager запущен"
+        log "  Веб-панель: http://$ROUTER_IP:2222"
+        log "  Настройте туннели через браузер"
+    else
+        warn "AWG-Manager установлен, но не отвечает на порту 2222"
+        warn "  Проверьте: /opt/etc/init.d/S99awg-manager restart"
+    fi
+}
+
 # --- Установка XKeen (xray + tproxy) ---
 setup_xkeen() {
     log "Проверка XKeen..."
