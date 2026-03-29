@@ -1440,11 +1440,42 @@ setup_dns_routes() {
     log "Настройка DNS-маршрутов для разблокировки"
     echo ""
 
-    local VPN_INTERFACE="OpkgTun0"
-    log "Интерфейс для DNS-маршрутов: $VPN_INTERFACE (AWG-Go)"
+    # Определить доступный VPN-интерфейс
+    local vpn_interface=""
+
+    if [[ -n "${AWG_INTERFACE:-}" ]]; then
+        vpn_interface="$AWG_INTERFACE"
+        log "Интерфейс для DNS-маршрутов: $vpn_interface (нативный AWG)"
+    else
+        # Поискать нативный WireGuard
+        for iface in Wireguard0 Wireguard1 Wireguard2; do
+            if ndmc_exec "show interface $iface" 2>/dev/null | grep -q "interface-name: $iface"; then
+                vpn_interface="$iface"
+                break
+            fi
+        done
+
+        # Поискать OpkgTun (AWG-Manager)
+        if [[ -z "$vpn_interface" ]]; then
+            for iface in OpkgTun0 OpkgTun1; do
+                if ndmc_exec "show interface $iface" 2>/dev/null | grep -q "interface-name: $iface"; then
+                    vpn_interface="$iface"
+                    break
+                fi
+            done
+        fi
+    fi
+
+    if [[ -z "$vpn_interface" ]]; then
+        warn "Не найден VPN-интерфейс для DNS-маршрутов"
+        warn "DNS-маршруты пропущены (XKeen использует собственную маршрутизацию xray)"
+        return 0
+    fi
+
+    log "Интерфейс: $vpn_interface"
 
     echo ""
-    echo "  Какие сервисы разблокировать через ${VPN_INTERFACE}?"
+    echo "  Какие сервисы разблокировать через ${vpn_interface}?"
     echo "   1) YouTube"
     echo "   2) Instagram"
     echo "   3) Facebook"
@@ -1493,7 +1524,7 @@ setup_dns_routes() {
             continue
         fi
 
-        local group_name="awg_${service}"
+        local group_name="vpn_${service}"
         log "Добавляю DNS-маршрут: $service..."
 
         # Create object-group fqdn
@@ -1506,11 +1537,11 @@ setup_dns_routes() {
         done < "$list_file"
 
         # Add DNS route
-        ndmc_exec "dns-proxy route object-group $group_name $VPN_INTERFACE auto reject"
+        ndmc_exec "dns-proxy route object-group $group_name $vpn_interface auto reject"
     done
 
     ndmc_exec "system configuration save"
-    log "DNS-маршруты настроены для: ${services[*]}"
+    log "DNS-маршруты настроены через $vpn_interface"
 }
 
 # --- Скачивание dns-lists (при запуске через curl) ---
