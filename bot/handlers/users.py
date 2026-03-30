@@ -32,9 +32,19 @@ HAPP_DOWNLOAD_TEXT = (
 )
 
 CLASH_DOWNLOAD_TEXT = (
-    "📲 <b>Clash Verge Rev (macOS/Windows/Linux):</b>\n"
-    "• <a href='https://github.com/clash-verge-rev/clash-verge-rev/releases/latest'>Скачать</a>\n"
-    "Импортируй файл → включи TUN → режим Rule"
+    "📲 <b>Clash Verge Rev</b> (macOS / Windows / Linux):\n"
+    "• <a href='https://github.com/clash-verge-rev/clash-verge-rev/releases/latest'>Скачать клиент</a>\n\n"
+    "<b>Что в конфиге:</b>\n"
+    "• VLESS Reality с split-tunneling\n"
+    "• Сайты РФ и локальная сеть — напрямую\n"
+    "• Всё остальное — через VPN\n"
+    "• DNS: Google DoH + защита от утечек\n\n"
+    "<b>Как подключить:</b>\n"
+    "1. Открой Clash Verge → Профили\n"
+    "2. Импортируй этот файл (перетащи или выбери)\n"
+    "3. Включи <b>Режим TUN</b> (установи службу если попросит)\n"
+    "4. Режим работы: <b>Rule</b>\n"
+    "5. Нажми подключиться"
 )
 
 
@@ -398,16 +408,6 @@ async def _send_vless_card(send_photo, send_text, name: str, link: str, send_doc
         parse_mode="HTML",
         reply_markup=kb,
     )
-    # Happ routing link
-    routing_link = deps.xray_mgr.get_happ_routing_link()
-    await send_text(
-        f"⚡ <b>Роутинг для Happ:</b>\n"
-        f"<code>{routing_link}</code>\n\n"
-        f"{HAPP_DOWNLOAD_TEXT}",
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-
     # Clash Verge Rev YAML config file
     uuid_match = re.search(r"vless://([^@]+)@", link)
     if uuid_match and send_document:
