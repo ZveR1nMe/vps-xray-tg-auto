@@ -31,6 +31,12 @@ HAPP_DOWNLOAD_TEXT = (
     "• <a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe'>Windows</a>"
 )
 
+CLASH_DOWNLOAD_TEXT = (
+    "📲 <b>Clash Verge Rev (macOS/Windows/Linux):</b>\n"
+    "• <a href='https://github.com/clash-verge-rev/clash-verge-rev/releases/latest'>Скачать</a>\n"
+    "Импортируй файл → включи TUN → режим Rule"
+)
+
 
 class AddUser(StatesGroup):
     waiting_name = State()
@@ -127,7 +133,7 @@ async def on_user_name(message: Message, state: FSMContext) -> None:
 async def _show_user_card(edit_or_send, answer_fn, name: str, title: str | None = None) -> None:
     store = _deps().user_store
     user = store.get_user(name)
-    if not user:
+    if user is None:
         return
 
     if title is None:
@@ -228,7 +234,7 @@ async def cb_add_key(callback: CallbackQuery) -> None:
             uuid = next((c["id"] for c in clients if c["email"] == name), "")
             await store.add_key(name, "vless", {"uuid": uuid})
             await callback.message.delete()
-            await _send_vless_card(callback.message.answer_photo, callback.message.answer, name, link)
+            await _send_vless_card(callback.message.answer_photo, callback.message.answer, name, link, callback.message.answer_document)
 
         elif key_type in ("awg", "awg_router"):
             client_ip = store.next_awg_ip()
@@ -266,7 +272,7 @@ async def cb_show_key(callback: CallbackQuery) -> None:
     if key_type == "vless":
         link = deps.xray_mgr.get_link(name)
         if link:
-            await _send_vless_card(callback.message.answer_photo, callback.message.answer, name, link)
+            await _send_vless_card(callback.message.answer_photo, callback.message.answer, name, link, callback.message.answer_document)
         else:
             await callback.message.answer(f"❌ VLESS ключ для {name} не найден")
 
@@ -350,7 +356,7 @@ async def cb_del_user_confirm(callback: CallbackQuery) -> None:
     store = deps.user_store
     user_data = store.get_user(name)
 
-    if user_data:
+    if user_data is not None:
         # Delete from service configs
         if "vless" in user_data and deps.xray_mgr:
             try:
@@ -371,7 +377,7 @@ async def cb_del_user_confirm(callback: CallbackQuery) -> None:
 
 # --- Send Cards ---
 
-async def _send_vless_card(send_photo, send_text, name: str, link: str) -> None:
+async def _send_vless_card(send_photo, send_text, name: str, link: str, send_document=None) -> None:
     deps = _deps()
     tg_proxy = deps.config.tg_proxy_link
 
@@ -392,6 +398,7 @@ async def _send_vless_card(send_photo, send_text, name: str, link: str) -> None:
         parse_mode="HTML",
         reply_markup=kb,
     )
+    # Happ routing link
     routing_link = deps.xray_mgr.get_happ_routing_link()
     await send_text(
         f"⚡ <b>Роутинг для Happ:</b>\n"
@@ -400,6 +407,19 @@ async def _send_vless_card(send_photo, send_text, name: str, link: str) -> None:
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+    # Clash Verge Rev YAML config file
+    uuid_match = re.search(r"vless://([^@]+)@", link)
+    if uuid_match and send_document:
+        clash_yaml = deps.xray_mgr.get_clash_config(uuid_match.group(1), name)
+        await send_document(
+            BufferedInputFile(clash_yaml.encode(), filename=f"clash-{name}.yaml"),
+            caption=(
+                f"📁 <b>Конфиг для Clash Verge Rev</b>\n\n"
+                f"{CLASH_DOWNLOAD_TEXT}"
+            ),
+            parse_mode="HTML",
+        )
 
 
 async def _send_awg_card(message: Message, name: str, key_type: str, config_text: str) -> None:
